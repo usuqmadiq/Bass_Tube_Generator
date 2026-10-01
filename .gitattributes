@@ -1,0 +1,9 @@
+# Переводы строк: в репозитории LF, запускаторы Windows — CRLF.
+* text=auto
+*.py text eol=lf
+*.md text eol=lf
+*.toml text eol=lf
+*.txt text eol=lf
+*.bat text eol=crlf
+*.vbs text eol=crlf
+*.sh text eol=lf

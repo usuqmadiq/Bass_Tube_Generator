@@ -1,0 +1,29 @@
+# Кэш и окружение — не в репозиторий.
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Вывод генератора в рабочей папке — не коммитить.
+# Готовые детали сборки лежат в parts/ и в git входят.
+/труба*.stl
+/труба*.step
+/труба*.stp
+*.3mf
+
+# Локальные настройки редакторов и системы.
+.cursor/
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini
+.DS_Store

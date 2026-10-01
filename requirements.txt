@@ -1,0 +1,10 @@
+# Зависимости генератора басовой трубы.
+# Ставятся установщиком Установить.bat / install.sh или так:
+#   python -m pip install -e ".[dev]"
+#
+# CadQuery подтянет OpenCASCADE (cadquery-ocp), VTK, SciPy и остальное —
+# это сотни мегабайт, без них нет тела и предпросмотра.
+
+cadquery>=2.8
+numpy>=1.26
+pillow>=10
