@@ -20,10 +20,35 @@ from bass_tube.acoustics.trim import TrimPlan, resolve_trim
 from bass_tube.acoustics.tuning import Tuning, resolve_tuning
 from bass_tube.body.slider import build_slider_body
 from bass_tube.body.splits import PrintSlice, split_solid_for_print
-from bass_tube.body.tube import BodyError, BodyVoice, TubeBody, build_joined_body, export_tube_body
+from bass_tube.body.tube import (
+    BodyError,
+    BodyVoice,
+    TubeBody,
+    build_joined_body,
+    export_tube_body,
+    export_whistle_head,
+)
 from bass_tube.body.tuner import build_tuner_body
-from bass_tube.constants import DUAL_INLET_SPACING_MM, PRINT_PLUG_MM
-from bass_tube.design import Design, DesignPlan, build_design, plan_design, preview_solid, slider_print_slices
+from bass_tube.constants import (
+    DEFAULT_SOURCE,
+    DEFAULT_TERMINATION,
+    DUAL_INLET_SPACING_MM,
+    MEMBRANE_MOUTHPIECE_SEAT_MM,
+    PRINT_PLUG_MM,
+    SOURCE_MEMBRANE,
+    TERMINATION_STOPPED,
+    WHISTLE_HEAD_AXIAL,
+)
+from bass_tube.design import (
+    Design,
+    DesignPlan,
+    _build_whistle_head,
+    build_design,
+    plan_design,
+    preview_solid,
+    slider_print_slices,
+    whistle_head_solids,
+)
 from bass_tube.layout.centerline import build_centerline
 from bass_tube.layout.clearance import check_channel_clearance
 from bass_tube.layout.coil import LayoutError, bottom_socket_mm
@@ -37,6 +62,7 @@ from bass_tube.layout.print_cuts import (
     keep_out_bands,
 )
 from bass_tube.params import ParamsError, TubeParams
+from bass_tube.sources import export_membrane_sources
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +91,9 @@ class PairPlan:
     params — общий набор с нотой дрона. melody и drone — планы труб в
     координатах общей детали. placement — найденное положение. spans и
     bands — прямые обеих труб и запретные полосы высот для разрезов.
-    height_mm — верх общей детали.
+    height_mm — верх общей детали. drone_inlet_offset_mm — насколько вход
+    дрона выше входа мелодии: ноль, кроме пары «мембрана + осевой свисток»,
+    где мундштук должен сесть на оба модуля разом.
     """
 
     params: TubeParams
@@ -75,6 +103,7 @@ class PairPlan:
     spans: tuple[ColumnSpan, ...]
     bands: tuple[tuple[float, float], ...]
     height_mm: float
+    drone_inlet_offset_mm: float = 0.0
 
 
 @dataclass(eq=False)
@@ -86,6 +115,9 @@ class VoicePair:
     slider_body — деталь слайдера мелодии. body_slices и slider_slices —
     куски на печать, если включены разрезы. width_mm, depth_mm, height_mm —
     габарит общей детали. coupling — что каналы не слиты.
+    melody_whistle_head и drone_whistle_head — печатные головки свистковых
+    голосов (None у мембраны), melody_whistle_report и drone_whistle_report —
+    их расчётные паспорта с допущениями.
     """
 
     params: TubeParams
@@ -102,6 +134,11 @@ class VoicePair:
     width_mm: float
     depth_mm: float
     height_mm: float
+    melody_whistle_head: object | None = None
+    drone_whistle_head: object | None = None
+    melody_whistle_report: dict | None = None
+    drone_whistle_report: dict | None = None
+    drone_inlet_offset_mm: float = 0.0
 
 
 def build_instrument(params: TubeParams) -> Design | VoicePair:
@@ -183,8 +220,22 @@ def _plan_with_melody(
     (PairPlan или None, причины отказа).
     """
     melody_set = melody.params
+    # Заглушённый конец дрона печатается глухим: ось длиннее воздушного
+    # столба на дно заглушки, как у одиночной трубы (см. plan_design).
+    drone_layout_mm = tuning.body_length_mm
+    if drone_set.termination == TERMINATION_STOPPED:
+        drone_layout_mm += drone_set.floor_mm
+    offset = drone_inlet_offset_mm(melody_set, drone_set)
+    drone_inlet_z = melody.coil.inlet_z_mm + offset
+    if offset > 0.0 and not params.print_splits and drone_inlet_z > params.max_height_mm + 1e-9:
+        return None, [
+            f"Мембранный дрон под общий мундштук поднимается на {_format_mm(offset)} мм "
+            f"над входом свистка и выходит за высоту печати "
+            f"{_format_mm(params.max_height_mm)} мм. Включите разрезы на печать "
+            "или поднимите высоту."
+        ]
     coils, reasons = drone_coils_for_inlet(
-        drone_set, tuning.body_length_mm, melody.coil.inlet_z_mm, trim
+        drone_set, drone_layout_mm, drone_inlet_z, trim
     )
     placed_any = False
     for coil in coils:
@@ -238,6 +289,7 @@ def _plan_with_melody(
             spans=spans,
             bands=bands,
             height_mm=height,
+            drone_inlet_offset_mm=offset,
         ), []
     if not reasons:
         if not placed_any:
@@ -295,11 +347,18 @@ def build_voice_pair(params: TubeParams) -> VoicePair:
         if len(body_slices) <= 1:
             body_slices = ()
     distance = plan.placement.min_distance_mm
+    melody_head, melody_report = _build_whistle_head(melody.params, melody.tuning)
+    drone_head, drone_report = _build_whistle_head(drone.params, drone.tuning)
     return VoicePair(
         params=params,
         melody=melody,
         drone=drone,
         body=body,
+        melody_whistle_head=melody_head,
+        drone_whistle_head=drone_head,
+        melody_whistle_report=melody_report,
+        drone_whistle_report=drone_report,
+        drone_inlet_offset_mm=plan.drone_inlet_offset_mm,
         melody_tuner=build_tuner_body(melody.trim) if melody.trim is not None else None,
         drone_tuner=build_tuner_body(drone.trim) if drone.trim is not None else None,
         slider_body=slider_body,
@@ -325,15 +384,25 @@ def melody_params(params: TubeParams) -> TubeParams:
     Принимает общий набор. Снимает ноту и подстройку дрона, чтобы расчёт
     одной трубы их не видел. Возвращает TubeParams мелодии.
     """
-    return replace(params, drone_note=None, drone_trim_semitones=0)
+    return replace(
+        params,
+        drone_note=None,
+        drone_trim_semitones=0,
+        drone_source=DEFAULT_SOURCE,
+        drone_termination=DEFAULT_TERMINATION,
+        **_whistle_reset(params.source),
+    )
 
 
 def drone_params(params: TubeParams) -> TubeParams:
-    """Параметры дрона: своя нота и подстройка, без дырок и слайдера.
+    """Параметры дрона: своя нота, источник, конец и подстройка.
 
     Принимает общий набор с нотой дрона. Цель дрона всегда нота, длина
     корпуса мелодии не переносится. Отверстия и слайдер мелодии гасятся:
-    дрон держит свой строй трубкой подстройки. Возвращает TubeParams дрона.
+    дрон держит свой строй трубкой подстройки. Источник и дальний конец
+    дрона становятся его собственными source и termination: свистковый
+    дрон считается свистковым строем, заглушённый печатается глухим.
+    Возвращает TubeParams дрона.
     """
     if not params.drone_note:
         raise ParamsError(["Нота дрона не задана."])
@@ -346,9 +415,86 @@ def drone_params(params: TubeParams) -> TubeParams:
         slider_semitones=0,
         slider_pairs=0,
         trim_semitones=params.drone_trim_semitones,
+        source=params.drone_source,
+        termination=params.drone_termination,
         drone_note=None,
         drone_trim_semitones=0,
+        drone_source=DEFAULT_SOURCE,
+        drone_termination=DEFAULT_TERMINATION,
+        **_whistle_reset(params.drone_source),
     )
+
+
+def _whistle_reset(source: str) -> dict:
+    """Свистковые поля голоса-мембраны в паре — по умолчанию.
+
+    Принимает источник голоса. Свистковая геометрия и поправка окна у пары
+    общие для свисткового голоса; мембранному голосу они не нужны, и его
+    собственная проверка их бы отвергла. Возвращает поля для replace:
+    пустой словарь у свистка.
+    """
+    if source != SOURCE_MEMBRANE:
+        return {}
+    from bass_tube.constants import (
+        DEFAULT_MOUTH_CORRECTION_MM,
+        DEFAULT_WHISTLE_BLOW_PRESSURE_PA,
+        DEFAULT_WHISTLE_EDGE_MM,
+        DEFAULT_WHISTLE_HEAD_KIND,
+        DEFAULT_WHISTLE_LABIUM_OFFSET_MM,
+        DEFAULT_WHISTLE_LID_KIT_MM,
+        DEFAULT_WHISTLE_SOCKET_CLEARANCE_MM,
+        DEFAULT_WHISTLE_WINDOW_AZIMUTH_DEG,
+        DEFAULT_WHISTLE_WINDWAY_LENGTH_MM,
+        DEFAULT_WHISTLE_WINDWAY_WIDTH_MM,
+    )
+
+    return dict(
+        mouth_correction_mm=DEFAULT_MOUTH_CORRECTION_MM,
+        whistle_windway_height_mm=None,
+        whistle_windway_width_mm=DEFAULT_WHISTLE_WINDWAY_WIDTH_MM,
+        whistle_windway_length_mm=DEFAULT_WHISTLE_WINDWAY_LENGTH_MM,
+        whistle_cutup_mm=None,
+        whistle_edge_thickness_mm=DEFAULT_WHISTLE_EDGE_MM,
+        whistle_labium_offset_mm=DEFAULT_WHISTLE_LABIUM_OFFSET_MM,
+        whistle_head_kind=DEFAULT_WHISTLE_HEAD_KIND,
+        whistle_window_azimuth_deg=DEFAULT_WHISTLE_WINDOW_AZIMUTH_DEG,
+        whistle_socket_clearance_mm=DEFAULT_WHISTLE_SOCKET_CLEARANCE_MM,
+        whistle_lid_kit_mm=DEFAULT_WHISTLE_LID_KIT_MM,
+        whistle_blow_pressure_pa=DEFAULT_WHISTLE_BLOW_PRESSURE_PA,
+    )
+
+
+def mouthpiece_seat_mm(voice: TubeParams) -> float | None:
+    """Где трубка двойного мундштука упирается в модуль голоса, над торцом трубы.
+
+    Принимает параметры одного голоса. У мембраны — торец трубки модуля
+    (MEMBRANE_MOUTHPIECE_SEAT_MM), у осевого свистка — сплошной торец
+    головки. Боковой свисток в мундштук не садится: None.
+    Возвращает миллиметры или None.
+    """
+    if voice.source == SOURCE_MEMBRANE:
+        return MEMBRANE_MOUTHPIECE_SEAT_MM
+    if voice.whistle_head_kind == WHISTLE_HEAD_AXIAL:
+        from bass_tube.whistle.axial_head import axial_head_for_tube
+
+        return axial_head_for_tube(voice).top_z_mm
+    return None
+
+
+def drone_inlet_offset_mm(melody: TubeParams, drone: TubeParams) -> float:
+    """Насколько вход дрона выше входа мелодии, чтобы мундштук сел на оба.
+
+    Принимает параметры мелодии и дрона. Если оба голоса садятся в двойной
+    мундштук, но модули разной высоты (мембрана и осевой свисток), вход
+    низкого модуля поднимается, высокого — опускается на разницу. Иначе
+    входы на одной высоте, как у пары мембран. Возвращает миллиметры:
+    плюс — дрон выше, минус — ниже.
+    """
+    melody_seat = mouthpiece_seat_mm(melody)
+    drone_seat = mouthpiece_seat_mm(drone)
+    if melody_seat is None or drone_seat is None:
+        return 0.0
+    return melody_seat - drone_seat
 
 
 def preview_instrument(result: Design | VoicePair):
@@ -411,7 +557,48 @@ def export_pair(pair: VoicePair, step_path: str | Path, stl_path: str | Path) ->
             saved.extend(_export_part(part, (), step, stl, suffix))
     if pair.slider_body is not None:
         saved.extend(_export_part(pair.slider_body, pair.slider_slices, step, stl, "-слайдер"))
+    saved.extend(export_membrane_sources(pair.melody.params, step))
+    saved.extend(export_membrane_sources(pair.drone.params, step, "-дрон"))
+    for head, suffix in (
+        (pair.melody_whistle_head, "-свисток"),
+        (pair.drone_whistle_head, "-свисток-дрон"),
+    ):
+        if head is None:
+            continue
+        paths = (
+            step.with_name(f"{step.stem}{suffix}{step.suffix}"),
+            stl.with_name(f"{stl.stem}{suffix}.stl"),
+            step.with_name(f"{step.stem}{suffix}-крышка{step.suffix}"),
+            stl.with_name(f"{stl.stem}{suffix}-крышка.stl"),
+        )
+        plan = pair.melody if head is pair.melody_whistle_head else pair.drone
+        saved.extend(export_whistle_head(head, *paths, kit_mm=plan.params.whistle_lid_kit_mm))
     return saved
+
+
+def whistle_heads_at_inlets(pair: VoicePair):
+    """Головки свистковых голосов на входах общей детали, для сборки.
+
+    Принимает VoicePair. Ставит каждую головку на вход своей трубы:
+    гнездо обнимает конец, детали не сливаются. Возвращает Compound или
+    None, если свистковых голосов нет.
+    """
+    import cadquery as cq
+
+    solids = []
+    for head, plan in (
+        (pair.melody_whistle_head, pair.melody),
+        (pair.drone_whistle_head, pair.drone),
+    ):
+        if head is None:
+            continue
+        inlet = plan.centerline.sample(0.0).point
+        solids.extend(
+            part.translate((inlet.x, inlet.y, inlet.z)) for part in whistle_head_solids(head)
+        )
+    if not solids:
+        return None
+    return cq.Compound.makeCompound(solids)
 
 
 def _export_part(

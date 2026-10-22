@@ -23,7 +23,9 @@ from bass_tube.constants import (
     TRIM_OVERLAP_MM,
     TRIM_SLIDE_CLEARANCE_MM,
 )
+from bass_tube.constants import SOURCE_WHISTLE
 from bass_tube.params import TubeParams
+from bass_tube.whistle.params import flue_for_tube
 
 
 class TrimError(ValueError):
@@ -78,6 +80,12 @@ def resolve_trim(params: TubeParams, upper: Tuning) -> TrimPlan | None:
         ) from exc
 
     lower_params = replace(params, note=lower_name, body_length_mm=None)
+    if params.source == SOURCE_WHISTLE:
+        # Голова печатается под верхнюю ноту: щель и окно не подбираются заново.
+        flue, cutup = flue_for_tube(params)
+        lower_params = replace(
+            lower_params, whistle_windway_height_mm=flue, whistle_cutup_mm=cutup
+        )
     try:
         lower = resolve_tuning(lower_params)
     except TuningError as exc:

@@ -15,6 +15,7 @@ import math
 
 import cadquery as cq
 
+from bass_tube.constants import TERMINATION_STOPPED
 from bass_tube.layout.centerline import Centerline, Straight, Turn, Vec3
 from bass_tube.layout.coil import Coil
 from bass_tube.layout.columns import Point2
@@ -77,14 +78,20 @@ def bore_parts(
     печатается: канал там не протягивается, вместо него царги открываются
     в дне под U-слайдер. Первый кусок — протяжка круга канала трубы от
     конца переходника (без переходника — от входа) до выхода, выход продлён
-    на полмиллиметра. Если переходник есть, дальше идут цилиндр посадки,
-    продлённый за вход, и конус. Возвращает список солидов.
+    на полмиллиметра. У заглушённого конца выход не прорезается: протяжка
+    останавливается на дно заглушки раньше конца оси, и остаток последней
+    прямой остаётся глухим (ось на это дно длиннее воздушного столба).
+    Если переходник есть, дальше идут цилиндр посадки, продлённый за вход,
+    и конус. Возвращает список солидов.
     """
     overshoot = _OPEN_END_OVERSHOOT_MM
     start = params.joint_length_mm if params.has_transition else -overshoot
     body_radius = params.bore_diameter_mm / 2.0
+    stop = centerline.length_mm + overshoot
+    if params.termination == TERMINATION_STOPPED:
+        stop = centerline.length_mm - params.floor_mm
     if not skip_turns_after:
-        pieces = [_sweep_along(centerline, start, centerline.length_mm + overshoot, body_radius)]
+        pieces = [_sweep_along(centerline, start, stop, body_radius)]
     else:
         pieces = _split_bore(centerline, start, body_radius, overshoot, skip_turns_after)
     if params.has_transition:

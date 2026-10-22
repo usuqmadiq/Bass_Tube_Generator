@@ -50,9 +50,7 @@ class HeadParts:
         """Separate, socket-down body and flat lid, each based at z = 0."""
         return {
             "body": self.body.translate((0.0, 0.0, self.params.socket_depth_mm)),
-            "lid": self.lid.translate(
-                (0.0, 0.0, -(self.params.chamber_height_mm + self.params.windway_height_mm))
-            ),
+            "lid": self.lid.translate((0.0, 0.0, -self.lid.val().BoundingBox().zmin)),
         }
 
 
@@ -77,7 +75,7 @@ def build_head(params: WhistleHeadParams | None = None) -> HeadParts:
     x_edge = p.window_end_x_mm
     x_back = p.labium_back_x_mm
     z_floor = p.chamber_height_mm
-    z_roof = z_floor + p.windway_height_mm
+    z_roof = z_floor + p.channel_depth_resolved_mm
     z_top = p.body_top_z_mm
     z_edge_low = p.labium_center_z_mm - p.edge_thickness_mm / 2.0
     z_edge_high = p.labium_center_z_mm + p.edge_thickness_mm / 2.0
@@ -145,11 +143,8 @@ def build_head(params: WhistleHeadParams | None = None) -> HeadParts:
         shape = shape.cut(cutter)
     shape = shape.clean()
 
-    lid_shape = _box(
-        x_in, x_mouth, -half_outer_width, half_outer_width, z_roof, z_top
-    )
     body = cq.Workplane("XY").add(shape)
-    lid = cq.Workplane("XY").add(lid_shape)
+    lid = build_lid(p, p.windway_height_mm)
     result = HeadParts(
         body=body,
         lid=lid,
@@ -162,6 +157,52 @@ def build_head(params: WhistleHeadParams | None = None) -> HeadParts:
     )
     _validate_parts(result)
     return result
+
+
+def build_lid(params: WhistleHeadParams, flue_mm: float) -> cq.Workplane:
+    """Крышка, которая оставляет в канале корпуса щель flue_mm.
+
+    Принимает размеры головы и щель. Пластина ложится на рельсы на глубине
+    канала; если канал глубже щели, снизу у неё вставка шириной канала минус
+    зазор на сторону — её нижняя грань и есть потолок щели. Координаты
+    сборочные, как у корпуса. Возвращает одну деталь. Если щель не больше
+    нуля или глубже канала, поднимает WhistleGeometryError.
+    """
+    from bass_tube.constants import WHISTLE_LID_INSERT_CLEARANCE_MM
+
+    p = params
+    depth = p.channel_depth_resolved_mm
+    if not 0.0 < flue_mm <= depth + 1e-9:
+        raise WhistleGeometryError(
+            f"Щель крышки {flue_mm:g} мм вне канала корпуса глубиной {depth:g} мм."
+        )
+    half_width = p.windway_width_mm / 2.0
+    half_outer_width = half_width + p.wall_mm
+    z_floor = p.chamber_height_mm
+    z_roof = z_floor + depth
+    x_in, x_mouth = p.wind_inlet_x_mm, p.window_start_x_mm
+    shape = _box(x_in, x_mouth, -half_outer_width, half_outer_width, z_roof, p.body_top_z_mm)
+    if depth - flue_mm > 1e-6:
+        insert_half = half_width - WHISTLE_LID_INSERT_CLEARANCE_MM
+        insert = _box(x_in, x_mouth, -insert_half, insert_half, z_floor + flue_mm, z_roof + 0.01)
+        shape = shape.fuse(insert).clean()
+    return cq.Workplane("XY").add(shape)
+
+
+def lid_kit(params: WhistleHeadParams, flues_mm) -> dict[float, cq.Workplane]:
+    """Набор сменных крышек в печатном виде: потолок щели на столе.
+
+    Принимает размеры головы и щели набора. Каждая крышка стоит на столе
+    гранью, которая образует потолок щели: это самая гладкая поверхность
+    FDM. Щели глубже канала пропускаются. Возвращает {щель: деталь}.
+    """
+    kit: dict[float, cq.Workplane] = {}
+    for flue in sorted(set(float(item) for item in flues_mm)):
+        if flue > params.channel_depth_resolved_mm + 1e-9:
+            continue
+        lid = build_lid(params, flue)
+        kit[flue] = lid.translate((0.0, 0.0, -lid.val().BoundingBox().zmin))
+    return kit
 
 
 def _validate_parts(parts: HeadParts) -> None:

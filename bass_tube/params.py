@@ -19,7 +19,25 @@ from bass_tube.constants import (
     DEFAULT_HOLE_COUNT,
     DEFAULT_HOLE_DIAMETER_MM,
     DEFAULT_LAYOUT,
+    DEFAULT_MOUTH_CORRECTION_MM,
     DEFAULT_SCALE,
+    DEFAULT_AXIAL_WINDWAY_LENGTH_MM,
+    DEFAULT_AXIAL_WINDWAY_WIDTH_MM,
+    DEFAULT_WHISTLE_BLOW_PRESSURE_PA,
+    DEFAULT_WHISTLE_LID_KIT_MM,
+    DEFAULT_WHISTLE_SOCKET_CLEARANCE_MM,
+    DEFAULT_WHISTLE_EDGE_MM,
+    DEFAULT_WHISTLE_HEAD_KIND,
+    DEFAULT_WHISTLE_LABIUM_OFFSET_MM,
+    DEFAULT_WHISTLE_WINDOW_AZIMUTH_DEG,
+    DEFAULT_WHISTLE_WINDWAY_LENGTH_MM,
+    DEFAULT_WHISTLE_WINDWAY_WIDTH_MM,
+    WHISTLE_HEAD_AXIAL,
+    WHISTLE_HEAD_KINDS,
+    WHISTLE_HEAD_LABELS,
+    WHISTLE_HEAD_SIDE,
+    DEFAULT_SOURCE,
+    DEFAULT_TERMINATION,
     DEFAULT_DRONE_TRIM_SEMITONES,
     DEFAULT_PRINT_SPLITS,
     DEFAULT_SLIDER_CLEARANCE_MM,
@@ -42,7 +60,15 @@ from bass_tube.constants import (
     SCALE_IDS,
     SEAT_FIT_CLEARANCE_MM,
     SEAT_OUTER_DIAMETER_MM,
+    SOURCE_LABELS,
+    SOURCE_MEMBRANE,
+    SOURCE_WHISTLE,
+    SOURCES,
     SPEED_OF_SOUND_M_S,
+    TERMINATION_LABELS,
+    TERMINATION_OPEN,
+    TERMINATION_STOPPED,
+    TERMINATIONS,
     TRANSITION_HALF_ANGLE_DEG,
     TRIM_MIN_WALL_MM,
 )
@@ -99,6 +125,25 @@ class TubeParams:
     floor_mm — материал цоколя между столом и нижней точкой канала.
     Высота под модуль мембраны (head_reserve_mm) в канал не входит.
     До калибровки головки delta_head_mm остаётся нулём.
+    source — источник звука: «membrane» (закрытый вход, четверть волны) или
+    «whistle» (лабиальная головка с открытым окном). termination — дальний
+    конец: у мембраны только «open»; у свистка «open» либо «stopped» —
+    заглушка печатается в теле, выход в дне не прорезается.
+    mouth_correction_mm — эквивалентная инерция окна свистка в миллиметрах
+    канала; ноль значит «не калибровано», у мембраны поля нет по смыслу.
+    Свисток пока без отверстий, слайдера и дрона; подстройка только при
+    открытом конце. body_length_mm у свистка — длина воздушного столба,
+    при заглушённом конце деталь длиннее на floor_mm печатной заглушки.
+    Геометрия головки свистка: whistle_windway_height_mm — щель h,
+    whistle_windway_width_mm — ширина B, whistle_windway_length_mm — канал
+    Lw, whistle_cutup_mm — окно до лабиума W, whistle_edge_thickness_mm —
+    кромка e, whistle_labium_offset_mm — смещение кромки y0 (может быть
+    отрицательным). Пустые h и W (None) подбираются по давлению дутья
+    whistle_blow_pressure_pa для ноты своего голоса: W — чтобы струя держала
+    основной тон (θ ≈ 11), h — W/12. whistle_socket_clearance_mm — зазор
+    гнезда головки на конец трубы по диаметру, whistle_lid_kit_mm — щели
+    набора сменных крышек боковой головки. У мембраны эти поля остаются
+    по умолчанию.
     """
 
     note: str | None
@@ -134,6 +179,22 @@ class TubeParams:
     delta_bends_mm: float
     speed_of_sound_m_s: float
     a4_hz: float
+    source: str = DEFAULT_SOURCE
+    termination: str = DEFAULT_TERMINATION
+    mouth_correction_mm: float = DEFAULT_MOUTH_CORRECTION_MM
+    whistle_windway_height_mm: float | None = None
+    whistle_windway_width_mm: float = DEFAULT_WHISTLE_WINDWAY_WIDTH_MM
+    whistle_windway_length_mm: float = DEFAULT_WHISTLE_WINDWAY_LENGTH_MM
+    whistle_cutup_mm: float | None = None
+    whistle_edge_thickness_mm: float = DEFAULT_WHISTLE_EDGE_MM
+    whistle_labium_offset_mm: float = DEFAULT_WHISTLE_LABIUM_OFFSET_MM
+    whistle_head_kind: str = DEFAULT_WHISTLE_HEAD_KIND
+    whistle_window_azimuth_deg: float = DEFAULT_WHISTLE_WINDOW_AZIMUTH_DEG
+    whistle_socket_clearance_mm: float = DEFAULT_WHISTLE_SOCKET_CLEARANCE_MM
+    whistle_lid_kit_mm: tuple[float, ...] = DEFAULT_WHISTLE_LID_KIT_MM
+    whistle_blow_pressure_pa: float = DEFAULT_WHISTLE_BLOW_PRESSURE_PA
+    drone_source: str = DEFAULT_SOURCE
+    drone_termination: str = DEFAULT_TERMINATION
 
     def __post_init__(self) -> None:
         """Приводит ноты мелодии и дрона к виду C2 и отвергает набор.
@@ -270,6 +331,22 @@ def tube_params(
     delta_bends_mm: float = 0.0,
     speed_of_sound_m_s: float = SPEED_OF_SOUND_M_S,
     a4_hz: float = A4_HZ,
+    source: str = DEFAULT_SOURCE,
+    termination: str = DEFAULT_TERMINATION,
+    mouth_correction_mm: float = DEFAULT_MOUTH_CORRECTION_MM,
+    whistle_windway_height_mm: float | None = None,
+    whistle_windway_width_mm: float | None = None,
+    whistle_windway_length_mm: float | None = None,
+    whistle_cutup_mm: float | None = None,
+    whistle_edge_thickness_mm: float = DEFAULT_WHISTLE_EDGE_MM,
+    whistle_labium_offset_mm: float = DEFAULT_WHISTLE_LABIUM_OFFSET_MM,
+    whistle_head_kind: str = DEFAULT_WHISTLE_HEAD_KIND,
+    whistle_window_azimuth_deg: float = DEFAULT_WHISTLE_WINDOW_AZIMUTH_DEG,
+    whistle_socket_clearance_mm: float = DEFAULT_WHISTLE_SOCKET_CLEARANCE_MM,
+    whistle_lid_kit_mm=DEFAULT_WHISTLE_LID_KIT_MM,
+    whistle_blow_pressure_pa: float = DEFAULT_WHISTLE_BLOW_PRESSURE_PA,
+    drone_source: str = DEFAULT_SOURCE,
+    drone_termination: str = DEFAULT_TERMINATION,
 ) -> TubeParams:
     """Собирает и проверяет входные параметры трубы.
 
@@ -298,7 +375,11 @@ def tube_params(
     отдельной трубой: без отверстий и слайдера мелодии, со своей подстройкой
     drone_trim_semitones (ноль — трубки у дрона нет). Насадку на две
     мембраны генератор не строит. Скорость звука по умолчанию — константа
-    мира, окно её не отдаёт.
+    мира, окно её не отдаёт. source — источник звука: мембрана либо свисток;
+    termination — дальний конец, заглушённый только у свистка (заглушка
+    печатается в теле). mouth_correction_mm — поправка окна свистка, ноль
+    значит «не калибровано». Свисток пока не сочетается с отверстиями,
+    слайдером и дроном, а при заглушённом конце — и с подстройкой.
 
     Возвращает неизменяемый TubeParams. Невалидный набор поднимает ParamsError
     с текстом причины: короткая посадка, нулевая стенка, нота без октавы,
@@ -355,8 +436,37 @@ def tube_params(
     drone_trim = _as_drone_trim_semitones(drone_trim_semitones)
     if drone is None:
         drone_trim = 0
+    kind_of_head = _as_whistle_head_kind(whistle_head_kind)
+    if whistle_windway_length_mm is None:
+        whistle_windway_length_mm = (
+            DEFAULT_AXIAL_WINDWAY_LENGTH_MM
+            if kind_of_head == WHISTLE_HEAD_AXIAL
+            else DEFAULT_WHISTLE_WINDWAY_LENGTH_MM
+        )
+    if whistle_windway_width_mm is None:
+        whistle_windway_width_mm = (
+            DEFAULT_AXIAL_WINDWAY_WIDTH_MM
+            if kind_of_head == WHISTLE_HEAD_AXIAL
+            else DEFAULT_WHISTLE_WINDWAY_WIDTH_MM
+        )
 
     return TubeParams(
+        source=_as_source(source),
+        termination=_as_termination(termination),
+        mouth_correction_mm=mouth_correction_mm,
+        whistle_windway_height_mm=whistle_windway_height_mm,
+        whistle_windway_width_mm=whistle_windway_width_mm,
+        whistle_windway_length_mm=whistle_windway_length_mm,
+        whistle_cutup_mm=whistle_cutup_mm,
+        whistle_edge_thickness_mm=whistle_edge_thickness_mm,
+        whistle_labium_offset_mm=whistle_labium_offset_mm,
+        whistle_head_kind=kind_of_head,
+        whistle_window_azimuth_deg=whistle_window_azimuth_deg,
+        whistle_socket_clearance_mm=whistle_socket_clearance_mm,
+        whistle_lid_kit_mm=_as_lid_kit(whistle_lid_kit_mm),
+        whistle_blow_pressure_pa=whistle_blow_pressure_pa,
+        drone_source=_as_source(drone_source),
+        drone_termination=_as_termination(drone_termination),
         note=note,
         body_length_mm=body_length_mm,
         outer_diameter_mm=outer_diameter_mm,
@@ -493,6 +603,7 @@ def _collect_reasons(
     _check_layout(params, reasons, numbers)
     _check_slider(params, reasons, numbers)
     _check_drone(params, reasons, drone_reason, numbers)
+    _check_source(params, reasons, numbers)
     _check_reference(numbers, reasons)
     return reasons
 
@@ -528,12 +639,25 @@ def _parse_numbers(params: TubeParams, reasons: list[str]) -> dict[str, float | 
         ("delta_head_mm", "Поправка головки", params.delta_head_mm),
         ("delta_out_mm", "Поправка открытого конца", params.delta_out_mm),
         ("delta_bends_mm", "Поправка изгибов", params.delta_bends_mm),
+        ("mouth_correction_mm", "Поправка окна свистка", params.mouth_correction_mm),
+        ("whistle_windway_width_mm", "Ширина щели свистка", params.whistle_windway_width_mm),
+        ("whistle_windway_length_mm", "Канал щели свистка", params.whistle_windway_length_mm),
+        ("whistle_edge_thickness_mm", "Кромка свистка", params.whistle_edge_thickness_mm),
+        ("whistle_labium_offset_mm", "Смещение кромки свистка", params.whistle_labium_offset_mm),
+        ("whistle_window_azimuth_deg", "Поворот окна свистка", params.whistle_window_azimuth_deg),
+        ("whistle_socket_clearance_mm", "Зазор гнезда свистка", params.whistle_socket_clearance_mm),
+        ("whistle_blow_pressure_pa", "Давление дутья", params.whistle_blow_pressure_pa),
         ("speed_of_sound_m_s", "Скорость звука", params.speed_of_sound_m_s),
         ("a4_hz", "Частота A4", params.a4_hz),
     )
     numbers: dict[str, float | None] = {
         key: _as_finite(label, value, reasons) for key, label, value in fields
     }
+    for key, label, value in (
+        ("whistle_windway_height_mm", "Щель свистка", params.whistle_windway_height_mm),
+        ("whistle_cutup_mm", "Окно свистка", params.whistle_cutup_mm),
+    ):
+        numbers[key] = None if value is None else _as_finite(label, value, reasons)
     if params.body_length_mm is None:
         numbers["body_length_mm"] = None
     else:
@@ -878,6 +1002,265 @@ def _check_drone(
         reasons.append("Подстройка дрона в полутонах должна быть целым числом.")
 
 
+def _check_source(
+    params: TubeParams,
+    reasons: list[str],
+    numbers: dict[str, float | None],
+) -> None:
+    """Проверяет источник звука, дальний конец и поправку окна.
+
+    Принимает параметры, список причин и уже прочитанные числа. У каждого
+    голоса свой источник и свой дальний конец: мембрана играет только с
+    открытым выходом, заглушённый печатается глухим и есть только у
+    свистка. Поправка окна и геометрия головки имеют смысл, лишь когда
+    хотя бы один голос — свисток. Свисток-мелодия пока не сочетается с
+    отверстиями и слайдером: их расчёт ещё считает закрытый вход. Трубка
+    подстройки у свисткового голоса только при открытом конце.
+    Ничего не возвращает.
+    """
+    for label, value in (("Источник", params.source), ("Источник дрона", params.drone_source)):
+        if value not in SOURCES:
+            known = ", ".join(SOURCE_LABELS[item] for item in SOURCES)
+            reasons.append(f"{label} «{value}» не известен: есть {known}.")
+    for label, value in (
+        ("Дальний конец", params.termination),
+        ("Дальний конец дрона", params.drone_termination),
+    ):
+        if value not in TERMINATIONS:
+            known = ", ".join(TERMINATION_LABELS[item] for item in TERMINATIONS)
+            reasons.append(f"{label} «{value}» не известен: есть {known}.")
+    if params.whistle_head_kind not in WHISTLE_HEAD_KINDS:
+        known = ", ".join(WHISTLE_HEAD_LABELS[item] for item in WHISTLE_HEAD_KINDS)
+        reasons.append(
+            f"Вид свистковой головки «{params.whistle_head_kind}» не известен: есть {known}."
+        )
+
+    mouth = numbers["mouth_correction_mm"]
+    if mouth is not None and mouth < 0.0:
+        reasons.append("Поправка окна свистка отрицательная.")
+
+    if params.drone_note is None:
+        if params.drone_source in SOURCES and params.drone_source != SOURCE_MEMBRANE:
+            reasons.append("Источник дрона задан, а ноты дрона нет.")
+        if (
+            params.drone_termination in TERMINATIONS
+            and params.drone_termination != TERMINATION_OPEN
+        ):
+            reasons.append("Дальний конец дрона задан, а ноты дрона нет.")
+
+    melody_whistle = params.source == SOURCE_WHISTLE
+    drone_whistle = params.drone_note is not None and params.drone_source == SOURCE_WHISTLE
+
+    if not melody_whistle and not drone_whistle:
+        if params.source == SOURCE_MEMBRANE and params.termination == TERMINATION_STOPPED:
+            reasons.append(
+                "Мембранная модель считает закрытый вход и открытый выход: "
+                "заглушённый дальний конец есть только у свистка."
+            )
+        if params.drone_note is not None and params.drone_termination == TERMINATION_STOPPED:
+            reasons.append(
+                "Дрон с мембраной играет только в открытый выход: "
+                "заглушённый конец есть только у свисткового дрона."
+            )
+        if mouth is not None and mouth != 0.0:
+            reasons.append("Поправка окна — параметр свистка, у мембраны её нет.")
+        if _whistle_geometry_changed(params, numbers):
+            reasons.append(
+                "Геометрия головки свистка задана, а свисткового голоса нет: "
+                "выберите свисток или верните поля свистка по умолчанию."
+            )
+        return
+
+    _check_whistle_head(params, reasons, numbers)
+
+    if melody_whistle:
+        if params.hole_count > 0:
+            reasons.append(
+                "Свисток с игровыми отверстиями пока не считается: расчёт дырок "
+                "ещё использует закрытый вход мембраны."
+            )
+        if params.slider_kind or params.slider_semitones > 0:
+            reasons.append(
+                "Свисток со слайдером пока не считается: расчёт слайдера "
+                "ещё использует закрытый вход мембраны."
+            )
+        trim = numbers["trim_semitones"]
+        if params.termination == TERMINATION_STOPPED and trim is not None and trim > 0.0:
+            reasons.append(
+                "Заглушённый конец печатается глухим: выдвижной трубке "
+                "подстройки некуда выходить. Уберите подстройку или откройте конец."
+            )
+    elif params.source == SOURCE_MEMBRANE and params.termination == TERMINATION_STOPPED:
+        reasons.append(
+            "Мембранная модель считает закрытый вход и открытый выход: "
+            "заглушённый дальний конец есть только у свистка."
+        )
+
+    if params.drone_note is not None:
+        drone_trim = numbers["drone_trim_semitones"]
+        if (
+            drone_whistle
+            and params.drone_termination == TERMINATION_STOPPED
+            and drone_trim is not None
+            and drone_trim > 0.0
+        ):
+            reasons.append(
+                "Заглушённый конец дрона печатается глухим: трубке подстройки "
+                "дрона некуда выходить. Уберите её или откройте конец дрона."
+            )
+        if not drone_whistle and params.drone_termination == TERMINATION_STOPPED:
+            reasons.append(
+                "Дрон с мембраной играет только в открытый выход: "
+                "заглушённый конец есть только у свисткового дрона."
+            )
+
+
+def _whistle_geometry_changed(
+    params: TubeParams,
+    numbers: dict[str, float | None],
+) -> bool:
+    """Отличается ли геометрия головки свистка от умолчаний.
+
+    Принимает параметры и уже прочитанные числа. Нечисловые поля не
+    считаются изменением: их уже отвергло чтение. Возвращает True, если
+    хотя бы одно свистковое поле сдвинуто.
+    """
+    if params.whistle_head_kind != DEFAULT_WHISTLE_HEAD_KIND:
+        return True
+    defaults = (
+        ("whistle_windway_width_mm", DEFAULT_WHISTLE_WINDWAY_WIDTH_MM),
+        ("whistle_windway_length_mm", DEFAULT_WHISTLE_WINDWAY_LENGTH_MM),
+        ("whistle_edge_thickness_mm", DEFAULT_WHISTLE_EDGE_MM),
+        ("whistle_labium_offset_mm", DEFAULT_WHISTLE_LABIUM_OFFSET_MM),
+        ("whistle_window_azimuth_deg", DEFAULT_WHISTLE_WINDOW_AZIMUTH_DEG),
+    )
+    if params.whistle_windway_height_mm is not None or params.whistle_cutup_mm is not None:
+        return True
+    return any(
+        numbers[key] is not None and numbers[key] != default
+        for key, default in defaults
+    )
+
+
+def _check_whistle_head(
+    params: TubeParams,
+    reasons: list[str],
+    numbers: dict[str, float | None],
+) -> None:
+    """Проверяет геометрию головки свистка.
+
+    Принимает параметры, список причин и уже прочитанные числа. Главные
+    правила продублированы по-русски: размеры положительные, кромка не
+    толще щели, кромка пересекает струю, щель со стенками входит в тело
+    головки. Затем головка собирается целиком, и остальные её проверки
+    ловятся сеткой безопасности. Ничего не возвращает.
+    """
+    height = numbers["whistle_windway_height_mm"]
+    width = numbers["whistle_windway_width_mm"]
+    length = numbers["whistle_windway_length_mm"]
+    cutup = numbers["whistle_cutup_mm"]
+    edge = numbers["whistle_edge_thickness_mm"]
+    offset = numbers["whistle_labium_offset_mm"]
+    if height is None or cutup is None:
+        # Пустые щель и окно подбираются по давлению дутья: проверяем то,
+        # что пойдёт в печать. Если набор и так битый, подбор не нужен.
+        from bass_tube.whistle.params import flue_for_tube
+
+        try:
+            auto_height, auto_cutup = flue_for_tube(params)
+        except Exception:
+            auto_height, auto_cutup = None, None
+        height = auto_height if height is None else height
+        cutup = auto_cutup if cutup is None else cutup
+
+    for label, value in (
+        ("Щель свистка", height),
+        ("Ширина щели свистка", width),
+        ("Канал щели свистка", length),
+        ("Окно свистка", cutup),
+        ("Кромка свистка", edge),
+    ):
+        if value is not None and value <= 0.0:
+            reasons.append(f"{label} должна быть больше нуля.")
+
+    if height is not None and edge is not None and 0.0 < height < edge:
+        reasons.append(
+            f"Кромка лабиума {_format_mm(edge)} мм толще щели "
+            f"{_format_mm(height)} мм."
+        )
+    if (
+        height is not None
+        and edge is not None
+        and offset is not None
+        and height > 0.0
+        and edge > 0.0
+        and abs(offset) >= (height + edge) / 2.0
+    ):
+        reasons.append(
+            f"Смещение кромки {_format_mm(offset)} мм выводит лабиум из струи: "
+            f"допустимо меньше {_format_mm((height + edge) / 2.0)} мм по модулю."
+        )
+    # Гнездо головки повторяет отверстие модуля, её стенка с обеих сторон
+    # одинакова, поэтому правило прототипа «щель со стенками уже тела»
+    # сводится к «щель уже отверстия модуля».
+    hole = numbers["module_hole_mm"]
+    if (
+        width is not None
+        and hole is not None
+        and width > 0.0
+        and hole > 0.0
+        and width >= hole
+    ):
+        reasons.append(
+            f"Щель свистка {_format_mm(width)} мм не умещается поперёк тела "
+            f"головки над отверстием {_format_mm(hole)} мм."
+        )
+
+    clearance = numbers["whistle_socket_clearance_mm"]
+    if clearance is not None and not 0.0 <= clearance <= 1.5:
+        reasons.append(
+            f"Зазор гнезда свистка {_format_mm(clearance)} мм вне 0…1,5 мм: "
+            "головка болтается или не налезает на трубу."
+        )
+    pressure = numbers["whistle_blow_pressure_pa"]
+    if pressure is not None and not 20.0 <= pressure <= 5000.0:
+        reasons.append(
+            f"Давление дутья {_format_mm(pressure)} Па вне 20…5000 Па."
+        )
+    for lid in params.whistle_lid_kit_mm:
+        if not 0.2 <= lid <= 4.0:
+            reasons.append(
+                f"Щель крышки {_format_mm(lid)} мм вне 0,2…4 мм."
+            )
+    azimuth = numbers["whistle_window_azimuth_deg"]
+    if (
+        params.whistle_head_kind == WHISTLE_HEAD_SIDE
+        and azimuth is not None
+        and azimuth != 0.0
+    ):
+        reasons.append(
+            "Поворот окна есть только у осевой головки: боковую разворачивают "
+            "руками при сборке."
+        )
+
+    if reasons:
+        return
+    if params.whistle_head_kind == WHISTLE_HEAD_AXIAL:
+        from bass_tube.whistle.axial_head import AxialHeadError, axial_head_for_tube
+
+        try:
+            axial_head_for_tube(params)
+        except AxialHeadError as exc:
+            reasons.append(f"Осевая головка свистка не собирается: {exc}")
+        return
+    from bass_tube.whistle.params import WhistleParamsError, head_for_tube
+
+    try:
+        head_for_tube(params)
+    except WhistleParamsError as exc:
+        reasons.append(f"Головка свистка не собирается: {exc}")
+
+
 def _check_reference(numbers: dict[str, float | None], reasons: list[str]) -> None:
     """Проверяет частоту ля и скорость звука, если её передали снаружи.
 
@@ -908,6 +1291,96 @@ def _as_finite(label: str, value: object, reasons: list[str]) -> float | None:
         reasons.append(f"{label}: нужно конечное число.")
         return None
     return number
+
+
+def _as_source(value: object) -> str:
+    """Идентификатор источника звука.
+
+    Принимает сырое значение: ключ membrane/whistle или русскую подпись.
+    None и пустая строка — мембрана, как раньше. Нестроковое поднимает
+    ParamsError. Неизвестный ключ возвращает как есть: его отвергнет
+    проверка набора. Возвращает канонический ключ.
+    """
+    if value is None:
+        return SOURCE_MEMBRANE
+    if not isinstance(value, str):
+        raise ParamsError(["Источник звука: ожидалась строка."])
+    cleaned = value.strip().casefold()
+    if not cleaned:
+        return SOURCE_MEMBRANE
+    if cleaned in SOURCES:
+        return cleaned
+    for key, label in SOURCE_LABELS.items():
+        if label == cleaned:
+            return key
+    return cleaned
+
+
+def _as_termination(value: object) -> str:
+    """Идентификатор дальнего конца трубы.
+
+    Принимает сырое значение: ключ open/stopped или русскую подпись,
+    «заглушен» без ё тоже понимается. None и пустая строка — открытый конец.
+    Нестроковое поднимает ParamsError. Неизвестный ключ возвращает как есть:
+    его отвергнет проверка набора. Возвращает канонический ключ.
+    """
+    if value is None:
+        return TERMINATION_OPEN
+    if not isinstance(value, str):
+        raise ParamsError(["Дальний конец: ожидалась строка."])
+    cleaned = value.strip().casefold()
+    if not cleaned:
+        return TERMINATION_OPEN
+    if cleaned in TERMINATIONS:
+        return cleaned
+    for key, label in TERMINATION_LABELS.items():
+        if label == cleaned or label.replace("ё", "е") == cleaned.replace("ё", "е"):
+            return key
+    return cleaned
+
+
+def _as_lid_kit(value: object) -> tuple[float, ...]:
+    """Щели набора сменных крышек: отсортированный кортеж без повторов.
+
+    Принимает None (набор по умолчанию), число, перечень чисел или пустой
+    перечень (без набора — только крышка расчётной щели). Нечисловое
+    поднимает ParamsError. Возвращает кортеж миллиметров.
+    """
+    if value is None:
+        return DEFAULT_WHISTLE_LID_KIT_MM
+    items = (value,) if _is_number(value) else value
+    try:
+        numbers = [float(item) for item in items if _is_number(item)]
+        if len(numbers) != len(tuple(items)):
+            raise TypeError
+    except TypeError:
+        raise ParamsError(["Набор крышек свистка: ожидались числа щелей, мм."]) from None
+    if not all(math.isfinite(item) for item in numbers):
+        raise ParamsError(["Набор крышек свистка: нужны конечные числа."])
+    return tuple(sorted({round(item, 3) for item in numbers}))
+
+
+def _as_whistle_head_kind(value: object) -> str:
+    """Идентификатор вида свистковой головки.
+
+    Принимает сырое значение: ключ side/axial или русскую подпись.
+    None и пустая строка — боковая, как у прототипа. Нестроковое поднимает
+    ParamsError. Неизвестный ключ возвращает как есть: его отвергнет
+    проверка набора. Возвращает канонический ключ.
+    """
+    if value is None:
+        return DEFAULT_WHISTLE_HEAD_KIND
+    if not isinstance(value, str):
+        raise ParamsError(["Вид свистковой головки: ожидалась строка."])
+    cleaned = value.strip().casefold()
+    if not cleaned:
+        return DEFAULT_WHISTLE_HEAD_KIND
+    if cleaned in WHISTLE_HEAD_KINDS:
+        return cleaned
+    for key, label in WHISTLE_HEAD_LABELS.items():
+        if label == cleaned:
+            return key
+    return cleaned
 
 
 def _as_drone_note(value: object) -> str | None:

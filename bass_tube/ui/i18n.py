@@ -287,6 +287,105 @@ STRINGS: dict[str, dict[str, str]] = {
         "report.pair.drone": "Дрон",
         "report.effective": "Эффективная длина {mm} мм",
         "report.body": "Длина корпуса {mm} мм",
+        "group.voice": "Источник звука",
+        "group.whistle": "Свистковая головка",
+        "field.build_scope": "Строить",
+        "scope.tube": "трубу с модулем",
+        "scope.modules": "только модуль",
+        "report.modules.intro": (
+            "Только модули-источники: труба не строится. Длина корпуса — под какую трубу "
+            "считан модуль."
+        ),
+        "report.modules.melody": "Модуль мелодии",
+        "report.modules.drone": "Модуль дрона",
+        "report.modules.membrane": (
+            "Мембранный модуль — готовая обкатанная деталь parts/head.stl с кольцом "
+            "parts/ring.stl: не перестраивается, сохраняется копией."
+        ),
+        "field.blow_pressure": "Давление дутья, Па",
+        "field.socket_clearance": "Зазор гнезда на трубу, мм",
+        "field.lid_kit": "Набор крышек: щели, мм",
+        "error.blow_pressure": "Давление дутья",
+        "error.socket_clearance": "Зазор гнезда",
+        "error.lid_kit": "Набор крышек",
+        "report.whistle.pressure": (
+            "Основной тон держится при {pmin}…{pmax} Па (θ 7…17); при ваших {p} Па θ = {theta}"
+        ),
+        "report.whistle.cutup": "Окно под {p} Па: {wmin}…{wmax} мм, стоит {w} мм",
+        "report.whistle.lids": "Крышки — щель: расход при {p} Па, кромка от центра струи:",
+        "report.whistle.lid": "  h {h} мм: {q} л/мин, W/h {ratio}, кромка {offset} мм{flag}",
+        "report.whistle.lid_out": " — кромка вне струи",
+        "report.whistle.warning": "Внимание: {text}",
+        "field.source": "Источник",
+        "field.termination": "Дальний конец",
+        "field.drone_source": "Источник дрона",
+        "field.drone_termination": "Дальний конец дрона",
+        "field.whistle_head_kind": "Вид головки",
+        "field.whistle_windway_height": "Щель h, мм",
+        "field.whistle_windway_width": "Ширина щели B, мм",
+        "field.whistle_windway_length": "Канал щели, мм",
+        "field.whistle_cutup": "Окно до кромки W, мм",
+        "field.whistle_edge": "Кромка, мм",
+        "field.whistle_labium_offset": "Смещение кромки, мм",
+        "field.whistle_azimuth": "Поворот окна, °",
+        "field.mouth_correction": "Поправка окна, мм",
+        "hint.voice": (
+            "Мембрана — обкатанный модуль, труба закрыта у входа: четверть волны. "
+            "Свисток — лабиальная головка на то же место: при открытом конце нота "
+            "примерно на октаву выше, заглушённый конец оставляет бас и печатается "
+            "глухим дном. Со свистком отверстия и слайдер пока не считаются — поля гаснут."
+        ),
+        "hint.whistle": (
+            "Боковая — головка со съёмной крышкой щели, дуют сбоку (пара — через "
+            "коллектор). Осевая — одна деталь под готовый двойной мундштук, окно вбок; "
+            "поворот окна только у неё. Канал щели пусто — 12 мм у боковой, 4 мм у "
+            "осевой. Пустые щель и окно подбираются по давлению дутья: окно — чтобы "
+            "струя держала основной тон, щель — окно/12. Ширина пусто — 12 мм у боковой, "
+            "9 у осевой. Набор крышек боковой головки — сменные щели без перепечатки "
+            "корпуса. Поправка окна 0 — не внесена, не измерена."
+        ),
+        "source.membrane": "мембрана",
+        "source.whistle": "свисток",
+        "termination.open": "открыт",
+        "termination.stopped": "заглушён",
+        "head.side": "боковая",
+        "head.axial": "осевая (мундштук)",
+        "error.whistle_height": "Щель свистка",
+        "error.whistle_width": "Ширина щели свистка",
+        "error.whistle_length": "Канал щели свистка",
+        "error.whistle_cutup": "Окно свистка",
+        "error.whistle_edge": "Кромка свистка",
+        "error.whistle_offset": "Смещение кромки",
+        "error.whistle_azimuth": "Поворот окна",
+        "error.mouth_correction": "Поправка окна",
+        "report.whistle.source": "Источник: свисток, головка {kind}, дальний конец {termination}",
+        "report.whistle.head": (
+            "Головка: щель {h} × {b} мм, окно до кромки {w} мм, кромка {e} мм, "
+            "шейка до лабиума {neck} мм"
+        ),
+        "report.whistle.corrections": (
+            "Поправки: окно {mouth} мм (не калибровано), выход {out} мм, "
+            "окно и переходник вместе {rest} мм"
+        ),
+        "report.whistle.passive": (
+            "Пассивный резонанс {hz} Гц; при поправке окна 10 / 30 / 60 мм — {scenarios} Гц"
+        ),
+        "report.whistle.air": (
+            "Струя при {pa} Па: {v} м/с в центре, расход {q} л/мин, θ = {theta}"
+        ),
+        "report.whistle.stopped": (
+            "Выход заглушён: дно {floor} мм печатается сплошным, ось длиннее столба на него."
+        ),
+        "report.whistle.experimental": (
+            "Головка не продувалась: частота — пассивный резонанс тракта, не обещанный звук. "
+            "Паспорт с допущениями: {warnings} предупреждений."
+        ),
+        "report.pair.seats": (
+            "Шаг осей входов {spacing} мм, входы на разной высоте: мелодия {melody} мм, "
+            "дрон {drone} мм — двойной мундштук "
+            "садится на оба модуля разом (опора трубки: мелодия {melody_seat}, дрон "
+            "{drone_seat} мм над торцом трубы)."
+        ),
     },
     LANG_EN: {
         "app.title": "Bass tube generator",
@@ -554,6 +653,104 @@ STRINGS: dict[str, dict[str, str]] = {
         "report.pair.drone": "Drone",
         "report.effective": "Effective length {mm} mm",
         "report.body": "Body length {mm} mm",
+        "group.voice": "Sound source",
+        "group.whistle": "Whistle head",
+        "field.build_scope": "Build",
+        "scope.tube": "tube with module",
+        "scope.modules": "module only",
+        "report.modules.intro": (
+            "Source modules only: no tube is built. The body length is the tube the "
+            "module is calculated for."
+        ),
+        "report.modules.melody": "Melody module",
+        "report.modules.drone": "Drone module",
+        "report.modules.membrane": (
+            "Membrane module — the proven ready part parts/head.stl with ring "
+            "parts/ring.stl: not rebuilt, saved as a copy."
+        ),
+        "field.blow_pressure": "Blowing pressure, Pa",
+        "field.socket_clearance": "Socket clearance on the tube, mm",
+        "field.lid_kit": "Lid kit: flues, mm",
+        "error.blow_pressure": "Blowing pressure",
+        "error.socket_clearance": "Socket clearance",
+        "error.lid_kit": "Lid kit",
+        "report.whistle.pressure": (
+            "The fundamental holds at {pmin}…{pmax} Pa (θ 7…17); at your {p} Pa θ = {theta}"
+        ),
+        "report.whistle.cutup": "Cut-up for {p} Pa: {wmin}…{wmax} mm, set to {w} mm",
+        "report.whistle.lids": "Lids — flue: flow at {p} Pa, edge from the jet centre:",
+        "report.whistle.lid": "  h {h} mm: {q} l/min, W/h {ratio}, edge {offset} mm{flag}",
+        "report.whistle.lid_out": " — edge outside the jet",
+        "report.whistle.warning": "Warning: {text}",
+        "field.source": "Source",
+        "field.termination": "Far end",
+        "field.drone_source": "Drone source",
+        "field.drone_termination": "Drone far end",
+        "field.whistle_head_kind": "Head type",
+        "field.whistle_windway_height": "Flue height h, mm",
+        "field.whistle_windway_width": "Flue width B, mm",
+        "field.whistle_windway_length": "Windway length, mm",
+        "field.whistle_cutup": "Cut-up to the edge W, mm",
+        "field.whistle_edge": "Edge, mm",
+        "field.whistle_labium_offset": "Edge offset, mm",
+        "field.whistle_azimuth": "Window turn, °",
+        "field.mouth_correction": "Mouth correction, mm",
+        "hint.voice": (
+            "Membrane — the proven module, the tube is closed at the inlet: a quarter wave. "
+            "Whistle — a fipple head in the same place: with an open end the note is about "
+            "an octave higher, a stopped end keeps the bass and is printed as a solid floor. "
+            "Tone holes and the slider are not calculated for the whistle yet — the fields turn off."
+        ),
+        "hint.whistle": (
+            "Side — a head with a removable flue lid, blown from the side (a pair via the "
+            "manifold). Axial — one part for the existing dual mouthpiece, window to the side; "
+            "only it has the window turn. Empty windway — 12 mm for side, 4 mm for axial. "
+            "Empty flue and cut-up follow the blowing pressure: the cut-up keeps the jet on "
+            "the fundamental, the flue is cut-up/12. Empty width — 12 mm side, 9 axial. "
+            "The side head lid kit swaps flues without reprinting the body. "
+            "Mouth correction 0 means not entered, not measured."
+        ),
+        "source.membrane": "membrane",
+        "source.whistle": "whistle",
+        "termination.open": "open",
+        "termination.stopped": "stopped",
+        "head.side": "side",
+        "head.axial": "axial (mouthpiece)",
+        "error.whistle_height": "Whistle flue height",
+        "error.whistle_width": "Whistle flue width",
+        "error.whistle_length": "Whistle windway length",
+        "error.whistle_cutup": "Whistle cut-up",
+        "error.whistle_edge": "Whistle edge",
+        "error.whistle_offset": "Edge offset",
+        "error.whistle_azimuth": "Window turn",
+        "error.mouth_correction": "Mouth correction",
+        "report.whistle.source": "Source: whistle, {kind} head, far end {termination}",
+        "report.whistle.head": (
+            "Head: flue {h} × {b} mm, cut-up {w} mm, edge {e} mm, neck to the labium {neck} mm"
+        ),
+        "report.whistle.corrections": (
+            "Corrections: mouth {mouth} mm (not calibrated), outlet {out} mm, "
+            "mouth and adapter together {rest} mm"
+        ),
+        "report.whistle.passive": (
+            "Passive resonance {hz} Hz; with mouth correction 10 / 30 / 60 mm — {scenarios} Hz"
+        ),
+        "report.whistle.air": (
+            "Jet at {pa} Pa: {v} m/s at the centre, flow {q} l/min, θ = {theta}"
+        ),
+        "report.whistle.stopped": (
+            "Stopped outlet: the {floor} mm floor is printed solid, the axis is longer than the air column by it."
+        ),
+        "report.whistle.experimental": (
+            "The head has not been blown: the frequency is the passive resonance of the bore, "
+            "not a promised sound. Passport with assumptions: {warnings} warnings."
+        ),
+        "report.pair.seats": (
+            "Inlet axes {spacing} mm apart, inlets at different heights: melody {melody} mm, "
+            "drone {drone} mm — the dual "
+            "mouthpiece seats on both modules at once (tube stop: melody {melody_seat}, drone "
+            "{drone_seat} mm above the tube end)."
+        ),
     },
 }
 
@@ -648,6 +845,26 @@ def slider_choice_label(kind: str, lang: str | None = None) -> str:
     """
     key = "slider.none" if not kind else f"slider.{kind}"
     return t(key, lang)
+
+
+def source_choice_label(source: str, lang: str | None = None) -> str:
+    """Подпись источника звука для списка окна: мембрана или свисток."""
+    return t(f"source.{source}", lang)
+
+
+def termination_choice_label(termination: str, lang: str | None = None) -> str:
+    """Подпись дальнего конца для списка окна: открыт или заглушён."""
+    return t(f"termination.{termination}", lang)
+
+
+def head_kind_choice_label(kind: str, lang: str | None = None) -> str:
+    """Подпись вида свистковой головки для списка окна."""
+    return t(f"head.{kind}", lang)
+
+
+def scope_choice_label(scope: str, lang: str | None = None) -> str:
+    """Подпись режима построения: труба с модулем или только модуль."""
+    return t(f"scope.{scope}", lang)
 
 
 def is_auto_word(text: str) -> bool:

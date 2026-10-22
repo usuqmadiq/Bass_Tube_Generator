@@ -21,23 +21,37 @@ from bass_tube.constants import (
     DEFAULT_HOLE_DIAMETER_MM,
     DEFAULT_SCALE,
     DEFAULT_SLIDER_CLEARANCE_MM,
+    DEFAULT_WHISTLE_HEAD_KIND,
     LAYOUT_BUNDLE,
     LAYOUTS,
     MODULE_HOLE_MM,
     SCALE_IDS,
     SLIDER_KIND_LABELS,
     SLIDER_KINDS,
+    SOURCE_LABELS,
+    SOURCE_MEMBRANE,
+    SOURCE_WHISTLE,
+    SOURCES,
+    TERMINATION_LABELS,
+    TERMINATION_OPEN,
+    TERMINATIONS,
+    WHISTLE_HEAD_KINDS,
+    WHISTLE_HEAD_LABELS,
 )
 from bass_tube.derived import fit_geometry
 from bass_tube.params import ParamsError, TubeParams, resolve_seat_diameter_mm, tube_params
 from bass_tube.ui.i18n import (
     current_language,
+    head_kind_choice_label,
     is_auto_word,
     is_drone_off_word,
     is_slider_off_word,
     scale_choice_label,
+    scope_choice_label,
     slider_choice_label,
+    source_choice_label,
     t,
+    termination_choice_label,
 )
 
 # Слово в поле числа прямых, означающее автоподбор (русская форма по умолчанию).
@@ -106,6 +120,27 @@ class FormInput:
     delta_out: str
     delta_bends: str
     a4: str
+    # Источник звука и свистковая головка. Пустое — по умолчанию: мембрана,
+    # открытый конец, боковая головка, канал щели по виду головки.
+    source: str = ""
+    termination: str = ""
+    drone_source: str = ""
+    drone_termination: str = ""
+    whistle_head_kind: str = ""
+    whistle_windway_height: str = ""
+    whistle_windway_width: str = ""
+    whistle_windway_length: str = ""
+    whistle_cutup: str = ""
+    whistle_edge: str = "0.3"
+    whistle_labium_offset: str = "0"
+    whistle_window_azimuth: str = "0"
+    mouth_correction: str = "0"
+    # Режим построения: пусто или «трубу с модулем» — как раньше,
+    # «только модуль» — источники голосов без трубы.
+    build_scope: str = ""
+    whistle_blow_pressure: str = "200"
+    whistle_socket_clearance: str = "0.43"
+    whistle_lid_kit: str = "0.6, 0.8, 1, 1.3, 1.6, 2, 2.5"
 
 
 def default_form() -> FormInput:
@@ -160,6 +195,12 @@ def default_form() -> FormInput:
         delta_out="",
         delta_bends="0",
         a4="440",
+        source=source_choice_label(SOURCE_MEMBRANE),
+        termination=termination_choice_label(TERMINATION_OPEN),
+        drone_source=source_choice_label(SOURCE_MEMBRANE),
+        drone_termination=termination_choice_label(TERMINATION_OPEN),
+        whistle_head_kind=head_kind_choice_label(DEFAULT_WHISTLE_HEAD_KIND),
+        build_scope=scope_choice_label("tube"),
     )
 
 
@@ -223,6 +264,22 @@ def params_from_form(form: FormInput) -> TubeParams:
     else:
         drone_trim_value = 1 if drone_trim is None else drone_trim
 
+    source = resolve_source(form.source)
+    termination = resolve_termination(form.termination)
+    drone_source = resolve_source(form.drone_source)
+    drone_termination = resolve_termination(form.drone_termination)
+    # Погашенные поля окна в расчёт не идут: у мембраны конец всегда открыт,
+    # без дрона его источник не нужен.
+    if source != SOURCE_WHISTLE:
+        termination = TERMINATION_OPEN
+    if drone_note is None:
+        drone_source = SOURCE_MEMBRANE
+    if drone_source != SOURCE_WHISTLE:
+        drone_termination = TERMINATION_OPEN
+    whistle: dict = {}
+    if source == SOURCE_WHISTLE or drone_source == SOURCE_WHISTLE:
+        whistle = _whistle_fields(form, reasons)
+
     required = (outer, wall, hole, seat, height, width, depth, reserve, gap, floor)
     if reasons or None in (*required, head, bends, a4):
         raise ParamsError(reasons or [t("error.form_incomplete")])
@@ -271,6 +328,11 @@ def params_from_form(form: FormInput) -> TubeParams:
             delta_out_mm=end_correction,
             delta_bends_mm=bends,
             a4_hz=a4,
+            source=source,
+            termination=termination,
+            drone_source=drone_source,
+            drone_termination=drone_termination,
+            **whistle,
         )
     except ParamsError as exc:
         raise ParamsError([*reasons, *exc.reasons]) from exc
@@ -362,6 +424,13 @@ def suggested_stem(params: TubeParams) -> str:
     if params.drone_note:
         stem += f"-{params.drone_note}"
     return stem
+
+
+def suggested_module_stem(params: TubeParams) -> str:
+    """Имя файла модуля без трубы: «свисток-C2» или «мембрана-C2»."""
+    kind = "свисток" if params.source == SOURCE_WHISTLE else "мембрана"
+    target = params.note or f"{format_mm(params.body_length_mm or 0.0)}мм"
+    return f"{kind}-{target}"
 
 
 def format_mm(value: float) -> str:
@@ -474,6 +543,112 @@ def _resolve_slider_kind(text: str) -> str:
         if slider_choice_label(key, "en").casefold() == folded:
             return key
         if slider_choice_label(key, "ru").casefold() == folded:
+            return key
+    return cleaned
+
+
+def _whistle_fields(form: FormInput, reasons: list[str]) -> dict:
+    """Свистковые поля формы для tube_params.
+
+    Принимает форму и список причин. Читает вид головки, геометрию щели и
+    окна, поворот окна и поправку окна. Пустое числовое поле — умолчание
+    расчёта, пустой канал щели — по виду головки. Нечисловое дописывает в
+    причины. Возвращает словарь именованных аргументов.
+    """
+    values = {
+        "whistle_head_kind": resolve_head_kind(form.whistle_head_kind),
+        "whistle_windway_length_mm": _optional_number(
+            form.whistle_windway_length, t("error.whistle_length"), reasons
+        ),
+    }
+    numbers = (
+        ("whistle_windway_height_mm", form.whistle_windway_height, "error.whistle_height"),
+        ("whistle_windway_width_mm", form.whistle_windway_width, "error.whistle_width"),
+        ("whistle_cutup_mm", form.whistle_cutup, "error.whistle_cutup"),
+        ("whistle_edge_thickness_mm", form.whistle_edge, "error.whistle_edge"),
+        ("whistle_labium_offset_mm", form.whistle_labium_offset, "error.whistle_offset"),
+        ("whistle_window_azimuth_deg", form.whistle_window_azimuth, "error.whistle_azimuth"),
+        ("mouth_correction_mm", form.mouth_correction, "error.mouth_correction"),
+        ("whistle_blow_pressure_pa", form.whistle_blow_pressure, "error.blow_pressure"),
+        ("whistle_socket_clearance_mm", form.whistle_socket_clearance, "error.socket_clearance"),
+    )
+    for name, text, label in numbers:
+        value = _optional_number(text, t(label), reasons)
+        if value is not None:
+            values[name] = value
+    kit = parse_lid_kit(form.whistle_lid_kit, reasons)
+    if kit is not None:
+        values["whistle_lid_kit_mm"] = kit
+    return values
+
+
+def parse_lid_kit(text: str, reasons: list[str]) -> tuple[float, ...] | None:
+    """Щели набора крышек из поля: числа через пробел, «;» или «, ».
+
+    Пустое поле — набор по умолчанию (None), «0» или «нет» — без набора.
+    Запятая между цифрами — десятичная, «, » с пробелом — разделитель.
+    Нечисловое дописывает в причины. Возвращает кортеж или None.
+    """
+    cleaned = text.strip()
+    if not cleaned:
+        return None
+    if cleaned.casefold() in {"0", "нет", "none", "no", "off"}:
+        return ()
+    parts = re.split(r"[;\s]+|,\s+", cleaned)
+    values: list[float] = []
+    for part in filter(None, parts):
+        number = _number(part)
+        if number is None:
+            reasons.append(f"{t('error.lid_kit')}: {t('error.expected_number')}")
+            return None
+        values.append(number)
+    return tuple(values)
+
+
+SCOPE_TUBE = "tube"
+SCOPE_MODULES = "modules"
+SCOPES = (SCOPE_TUBE, SCOPE_MODULES)
+
+
+def resolve_scope(text: str) -> str:
+    """Режим построения из поля: tube/modules или подпись. Пустое — труба."""
+    return _resolve_choice(text, SCOPES, {}, scope_choice_label, SCOPE_TUBE)
+
+
+def resolve_source(text: str) -> str:
+    """Ключ источника из поля: membrane/whistle, русская или английская подпись.
+
+    Пустое — мембрана. Неизвестное отдаёт как есть: его отвергнет проверка.
+    """
+    return _resolve_choice(text, SOURCES, SOURCE_LABELS, source_choice_label, SOURCE_MEMBRANE)
+
+
+def resolve_termination(text: str) -> str:
+    """Ключ дальнего конца из поля: open/stopped или подпись. Пустое — открыт."""
+    return _resolve_choice(
+        text, TERMINATIONS, TERMINATION_LABELS, termination_choice_label, TERMINATION_OPEN
+    )
+
+
+def resolve_head_kind(text: str) -> str:
+    """Ключ вида головки из поля: side/axial или подпись. Пустое — боковая."""
+    return _resolve_choice(
+        text, WHISTLE_HEAD_KINDS, WHISTLE_HEAD_LABELS, head_kind_choice_label,
+        DEFAULT_WHISTLE_HEAD_KIND,
+    )
+
+
+def _resolve_choice(text: str, keys, labels: dict, label_fn, default: str) -> str:
+    """Ключ списка по ключу, подписи ядра или подписи окна на любом языке."""
+    cleaned = text.strip()
+    if not cleaned:
+        return default
+    folded = cleaned.casefold()
+    if folded in keys:
+        return folded
+    for key in keys:
+        candidates = (labels.get(key, ""), label_fn(key, "ru"), label_fn(key, "en"))
+        if any(folded == item.casefold() for item in candidates if item):
             return key
     return cleaned
 

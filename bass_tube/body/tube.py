@@ -17,6 +17,7 @@ from pathlib import Path
 import cadquery as cq
 
 from bass_tube.acoustics.slider import SliderPlan, skip_turns_after_straights
+from bass_tube.constants import TERMINATION_STOPPED
 from bass_tube.body.parts import (
     base_outline_radius_mm,
     base_parts,
@@ -215,6 +216,63 @@ def export_tube_body(
         raise BodyError(f"Деталь не записалась в STEP или STL: {exc}") from exc
 
 
+def export_whistle_head(
+    head_parts,
+    body_step_path: str | Path,
+    body_stl_path: str | Path,
+    lid_step_path: str | Path,
+    lid_stl_path: str | Path,
+    kit_mm=(),
+    stl_tolerance_mm: float = 0.03,
+    stl_angular_tolerance: float = 0.08,
+) -> list[Path]:
+    """Пишет печатные детали головки свистка в STEP и STL.
+
+    Принимает HeadParts боковой головки (корпус и съёмная крышка расчётной
+    щели) либо AxialHeadParts осевой (одна деталь, пути крышки не
+    используются), пути файлов и щели набора сменных крышек боковой головки:
+    каждая пишется рядом с основной крышкой с суффиксом «-h<щель>». Детали
+    кладутся печатной стороной на z = 0, у крышек на столе — потолок щели.
+    Допуск сетки мельче, чем у трубы: щель и кромка — доли миллиметра.
+    Создаёт каталоги. Возвращает записанные пути. Если запись не удалась,
+    поднимает BodyError.
+    """
+    lid_step, lid_stl = Path(lid_step_path), Path(lid_stl_path)
+    if hasattr(head_parts, "print_parts"):
+        from bass_tube.whistle.geometry import lid_kit
+
+        parts = head_parts.print_parts()
+        jobs = [
+            (parts["body"], Path(body_step_path), Path(body_stl_path)),
+            (parts["lid"], lid_step, lid_stl),
+        ]
+        for flue, lid in lid_kit(head_parts.params, kit_mm).items():
+            tag = f"-h{flue:g}"
+            jobs.append((
+                lid,
+                lid_step.with_name(f"{lid_step.stem}{tag}{lid_step.suffix}"),
+                lid_stl.with_name(f"{lid_stl.stem}{tag}{lid_stl.suffix}"),
+            ))
+    else:
+        jobs = [(head_parts.print_part(), Path(body_step_path), Path(body_stl_path))]
+    written: list[Path] = []
+    try:
+        for shape, step, stl in jobs:
+            step.parent.mkdir(parents=True, exist_ok=True)
+            stl.parent.mkdir(parents=True, exist_ok=True)
+            cq.exporters.export(shape, str(step))
+            cq.exporters.export(
+                shape,
+                str(stl),
+                tolerance=stl_tolerance_mm,
+                angularTolerance=stl_angular_tolerance,
+            )
+            written.extend((step, stl))
+    except Exception as exc:
+        raise BodyError(f"Головка свистка не записалась в STEP или STL: {exc}") from exc
+    return written
+
+
 def load_tube_step(step_path: str | Path) -> cq.Workplane:
     """Читает деталь обратно из STEP.
 
@@ -365,7 +423,9 @@ def _require_one_open_tube(
     Принимает тело, ось, параметры и номера прямых перед пропущенными
     коленами слайдера. В посадке, на середине оси (если она не на
     пропущенном колене) и у выхода канал должен быть пустым, середина
-    стенки — материалом, тело — одним валидным солидом. Ничего не возвращает.
+    стенки — материалом, тело — одним валидным солидом. У заглушённого
+    конца выход, наоборот, закрыт: середина печатной заглушки — материал,
+    а воздушный столб прямо над ней пуст. Ничего не возвращает.
     Иначе поднимает BodyError.
     """
     solids = solid.solids().vals()
@@ -373,7 +433,14 @@ def _require_one_open_tube(
         raise BodyError("Сборка не дала одно целое тело.")
 
     shape = solids[0]
-    for station in _wall_stations(centerline, params, skip_turns_after):
+    stations = _wall_stations(centerline, params, skip_turns_after)
+    if params.termination == TERMINATION_STOPPED:
+        plug = centerline.sample(centerline.length_mm - params.floor_mm / 2.0)
+        if not shape.isInside(_vector(plug.point)):
+            raise BodyError("Заглушённый выход не закрылся материалом.")
+        air_end = centerline.length_mm - params.floor_mm - 1.0
+        stations = stations + (max(air_end, 0.0),)
+    for station in stations:
         frame = centerline.sample(station)
         if shape.isInside(_vector(frame.point)):
             raise BodyError("Канал получился заглушённым.")

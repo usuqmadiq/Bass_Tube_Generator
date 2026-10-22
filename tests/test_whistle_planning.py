@@ -53,7 +53,10 @@ class WhistlePlanningTests(unittest.TestCase):
         self.assertEqual(result["status"], "experimental_unvoiced")
         self.assertEqual(len(result["voices"]), 2)
         self.assertAlmostEqual(result["pair"]["beat_hz"], 2, places=7)
-        self.assertFalse(result["pair"]["common_supply_manifold"])
+        # С шага 3 пара по умолчанию получает коллектор общей подачи;
+        # раздельные подачи остаются под флагом --no-manifold.
+        self.assertTrue(result["pair"]["common_supply_manifold"])
+        self.assertGreaterEqual(result["pair"]["manifold"]["grip_mm"], 2.0)
         self.assertNotIn("exports", result)
 
 

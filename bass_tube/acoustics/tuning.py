@@ -1,7 +1,9 @@
-"""Строй закрыто-открытой трубы: нота, частота и длина корпуса.
+"""Строй трубы: нота, частота и длина корпуса для мембраны и свистка.
 
-Труба считается закрытой со стороны мембраны и открытой на выходе.
-Основная длина — четверть волны. Передув на октаву здесь не закладывается.
+У мембраны труба закрыта со стороны модуля и открыта на выходе: основная
+длина — четверть волны, передув на октаву не закладывается. У свистка вход —
+лабиальное окно с инерционной поправкой mouth_correction_mm, дальний конец
+открыт или заглушён; граничные условия и матрицы берутся из bass_tube.whistle.
 Если у конца другой диаметр, чем у трубы, длина считается по профилю
 с переходником, а разница с ровной трубой ложится в delta_transition_mm.
 Геометрию укладки этот модуль не проверяет: длинный корпус возвращается
@@ -19,7 +21,23 @@ from bass_tube.acoustics.profile import (
     frequency_for_rest_length_hz,
     rest_length_for_frequency_mm,
 )
+from bass_tube.constants import (
+    DEFAULT_SOURCE,
+    DEFAULT_TERMINATION,
+    SOURCE_WHISTLE,
+    TERMINATION_STOPPED,
+    WHISTLE_HEAD_AXIAL,
+)
 from bass_tube.params import TubeParams
+from bass_tube.whistle.acoustics import (
+    BoreSection,
+    WhistleAcousticsError,
+    first_resonance_hz,
+    ideal_effective_length_mm,
+    sections_for_tube,
+    straight_length_for_frequency_mm,
+)
+from bass_tube.whistle.params import WhistleParamsError, head_for_tube
 
 
 class TuningError(ValueError):
@@ -38,6 +56,15 @@ class Tuning:
     узкий конец у мембраны делает его отрицательным, то есть корпус длиннее.
     head_calibrated остаётся ложью, пока нет профиля замера мембраны:
     ручное число в delta_head_mm калибровкой не считается.
+
+    source и termination копируют параметры. У свистка delta_head_mm и
+    delta_bends_mm мембраны не применяются и равны нулю; whistle_neck_mm —
+    модельная цилиндрическая шейка головки до лабиума (у мембраны ноль);
+    mouth_correction_mm — поправка окна, ноль значит «не калибровано»;
+    effective_length_mm — идеал c/(2f) открытой и c/(4f) заглушённой трубы,
+    delta_transition_mm — остаток: L_body = L_eff − Δ_out − шейка − Δ_transition,
+    в нём сидят окно и переходник. body_length_mm — длина воздушного столба;
+    при заглушённом конце печатная деталь длиннее на дно заглушки.
     """
 
     note: str
@@ -50,6 +77,10 @@ class Tuning:
     delta_transition_mm: float
     head_calibrated: bool
     cents: float
+    source: str = DEFAULT_SOURCE
+    termination: str = DEFAULT_TERMINATION
+    mouth_correction_mm: float = 0.0
+    whistle_neck_mm: float = 0.0
 
     @property
     def head_calibration_mark(self) -> str:
@@ -76,7 +107,17 @@ def resolve_tuning(params: TubeParams) -> Tuning:
     Возвращает Tuning. Головка в результате помечена как некалиброванная.
     Если корпус короче стыка или не положительный, либо эффективная
     длина не положительна, поднимает TuningError с текстом причины.
+
+    У свистка (source="whistle") граничные условия другие: лабиальное окно
+    с поправкой mouth_correction_mm на входе, открытый или заглушённый
+    дальний конец; поправки мембраны delta_head_mm и delta_bends_mm не
+    применяются. body_length_mm — длина воздушного столба трубы без
+    модельной шейки головки.
     """
+    if params.source == SOURCE_WHISTLE:
+        if params.note is not None:
+            return _whistle_tuning_from_note(params)
+        return _whistle_tuning_from_length(params)
     if params.note is not None:
         return _tuning_from_note(params)
     return _tuning_from_length(params)
@@ -197,6 +238,215 @@ def _frequency_with_transition(params: TubeParams, body_mm: float) -> float:
         raise TuningError(str(exc)) from exc
 
 
+def _whistle_tuning_from_note(params: TubeParams) -> Tuning:
+    """Считает длину воздушного столба свистковой трубы под заданную ноту.
+
+    Принимает параметры со свистком и именем ноты. Переводит ноту в частоту,
+    у ровного канала берёт обратную формулу модели окна, при переходнике
+    подбирает остаток канала делением отрезка по матричному резонансу.
+    Модельная шейка головки в корпус не входит и вычитается.
+    Возвращает Tuning с нулевым отклонением в центах. Если корпус выходит
+    короче стыка или расчёт не сходится, поднимает TuningError.
+    """
+    note = parse_note_name(params.note or "")
+    frequency = frequency_hz(midi_number(note), params.a4_hz)
+    neck = _whistle_neck_mm(params)
+    body = _whistle_body_for_frequency_mm(params, frequency, neck)
+    _require_body_length(body, params)
+    return _assemble_whistle(params, note.spelling, frequency, body, neck, cents=0.0)
+
+
+def _whistle_tuning_from_length(params: TubeParams) -> Tuning:
+    """Прогнозирует частоту свистковой трубы по длине воздушного столба.
+
+    Принимает параметры со свистком и body_length_mm — длиной воздушного
+    столба (у заглушённого конца деталь длиннее на печатную заглушку).
+    Длину не меняет: собирает секции с шейкой головки, ищет первый
+    пассивный резонанс и называет ближайшую ноту.
+    Возвращает Tuning. Если длина короче стыка, резонанс не находится
+    или частота вне нот C-1…B9, поднимает TuningError.
+    """
+    body = float(params.body_length_mm or 0.0)
+    _require_body_length(body, params)
+    neck = _whistle_neck_mm(params)
+    frequency = _whistle_frequency_for_body_hz(params, body, neck)
+    try:
+        nearest = note_from_midi(_nearest_midi(frequency, params.a4_hz))
+    except NoteNameError as exc:
+        raise TuningError(
+            f"Частота {_format_hz(frequency)} Гц не попадает в ноты от C-1 до B9."
+        ) from exc
+    nearest_frequency = frequency_hz(midi_number(nearest), params.a4_hz)
+    return _assemble_whistle(
+        params, nearest.spelling, frequency, body, neck,
+        cents=_cents(frequency, nearest_frequency),
+    )
+
+
+def _whistle_neck_mm(params: TubeParams) -> float:
+    """Модельная цилиндрическая шейка свистковой головки до лабиума.
+
+    Принимает параметры. Собирает головку выбранного вида из свистковых
+    полей набора на конец под модуль: та же геометрия, что пойдёт в
+    печать. У боковой головки шейка — до центра струи, у осевой — высота
+    лабиума. Это геометрический ориентир, не калиброванная поправка окна.
+    Возвращает миллиметры. Если головка на такой конец не садится,
+    поднимает TuningError с причиной из её проверки.
+    """
+    if params.whistle_head_kind == WHISTLE_HEAD_AXIAL:
+        from bass_tube.whistle.axial_head import AxialHeadError, axial_head_for_tube
+
+        try:
+            return axial_head_for_tube(params).nominal_head_length_mm
+        except AxialHeadError as exc:
+            raise TuningError(
+                f"Осевая головка не садится на этот конец: {exc}"
+            ) from exc
+    try:
+        head = head_for_tube(params)
+    except WhistleParamsError as exc:
+        raise TuningError(f"Свистковая головка не садится на этот конец: {exc}") from exc
+    return head.nominal_head_length_mm
+
+
+def _whistle_outlet_mm(params: TubeParams) -> float:
+    """Поправка дальнего конца свистковой трубы.
+
+    Принимает параметры. У открытого конца — обычная поправка выхода,
+    у заглушённого поправки нет. Возвращает миллиметры.
+    """
+    if params.termination == TERMINATION_STOPPED:
+        return 0.0
+    return params.delta_out_mm
+
+
+def _whistle_sections(params: TubeParams, body_mm: float, neck_mm: float) -> tuple[BoreSection, ...]:
+    """Секции канала от лабиума до дальнего конца.
+
+    Принимает параметры, длину воздушного столба и шейку головки.
+    Первая секция — шейка на канале конца, дальше посадка, лесенка
+    переходника и труба, как их режет sections_for_tube.
+    Возвращает кортеж BoreSection.
+    """
+    return (
+        BoreSection(neck_mm, params.seat_bore_diameter_mm),
+        *sections_for_tube(params, body_mm),
+    )
+
+
+def _whistle_frequency_for_body_hz(params: TubeParams, body_mm: float, neck_mm: float) -> float:
+    """Первый пассивный резонанс свистковой трубы заданной длины.
+
+    Принимает параметры, длину воздушного столба и шейку головки.
+    Возвращает герцы. Ошибки матричного расчёта переводит в TuningError.
+    """
+    try:
+        return first_resonance_hz(
+            _whistle_sections(params, body_mm, neck_mm),
+            termination=params.termination,
+            mouth_correction_mm=params.mouth_correction_mm,
+            end_correction_mm=_whistle_outlet_mm(params),
+            c=params.speed_of_sound_m_s,
+        )
+    except WhistleAcousticsError as exc:
+        raise TuningError(str(exc)) from exc
+
+
+def _whistle_body_for_frequency_mm(params: TubeParams, frequency: float, neck_mm: float) -> float:
+    """Длина воздушного столба свистковой трубы под частоту.
+
+    Принимает параметры, целевую частоту и шейку головки. У ровного канала
+    длина берётся обратной формулой модели окна, и шейка вычитается.
+    С переходником остаток канала после стыка подбирается делением отрезка:
+    резонанс монотонно падает с длиной. Возвращает миллиметры.
+    Если даже стык с шейкой звучит ниже цели или расчёт не сходится,
+    поднимает TuningError.
+    """
+    outlet = _whistle_outlet_mm(params)
+    try:
+        if not params.has_transition:
+            total = straight_length_for_frequency_mm(
+                frequency,
+                termination=params.termination,
+                mouth_correction_mm=params.mouth_correction_mm,
+                end_correction_mm=outlet,
+                c=params.speed_of_sound_m_s,
+            )
+            return total - neck_mm
+
+        def resonance(rest_mm: float) -> float:
+            return first_resonance_hz(
+                _whistle_sections(params, params.joint_length_mm + rest_mm, neck_mm),
+                termination=params.termination,
+                mouth_correction_mm=params.mouth_correction_mm,
+                end_correction_mm=outlet,
+                c=params.speed_of_sound_m_s,
+            )
+
+        if resonance(0.0) <= frequency:
+            raise TuningError(
+                "Посадка с переходником и шейкой головки длиннее волны цели: "
+                "под канал трубы места не остаётся."
+            )
+        high = params.speed_of_sound_m_s * 1000.0 / (2.0 * frequency)
+        for _ in range(16):
+            if resonance(high) < frequency:
+                break
+            high *= 2.0
+        else:
+            raise TuningError("Остаток канала свистковой трубы не ограничился сверху.")
+        low = 0.0
+        for _ in range(200):
+            middle = (low + high) / 2.0
+            if resonance(middle) > frequency:
+                low = middle
+            else:
+                high = middle
+            if high - low < 1e-9 * max(high, 1.0):
+                break
+        return params.joint_length_mm + (low + high) / 2.0
+    except WhistleAcousticsError as exc:
+        raise TuningError(str(exc)) from exc
+
+
+def _assemble_whistle(
+    params: TubeParams,
+    note: str,
+    frequency: float,
+    body: float,
+    neck_mm: float,
+    cents: float,
+) -> Tuning:
+    """Собирает строй свистковой трубы из уже посчитанных чисел.
+
+    Принимает параметры, имя ноты, частоту, длину воздушного столба,
+    шейку головки и центы. Поправки мембраны не применяются и пишутся
+    нулями; delta_transition_mm — остаток идеальной эффективной длины
+    после вычета поправки выхода, шейки и корпуса: в нём сидят окно и
+    переходник. Возвращает неизменяемый Tuning с некалиброванной головкой.
+    """
+    effective = ideal_effective_length_mm(
+        frequency, params.termination, params.speed_of_sound_m_s
+    )
+    outlet = _whistle_outlet_mm(params)
+    return Tuning(
+        note=note,
+        frequency_hz=frequency,
+        effective_length_mm=effective,
+        body_length_mm=body,
+        delta_head_mm=0.0,
+        delta_out_mm=outlet,
+        delta_bends_mm=0.0,
+        delta_transition_mm=effective - outlet - neck_mm - body,
+        head_calibrated=False,
+        cents=cents,
+        source=params.source,
+        termination=params.termination,
+        mouth_correction_mm=params.mouth_correction_mm,
+        whistle_neck_mm=neck_mm,
+    )
+
+
 def _assemble(
     params: TubeParams,
     note: str,
@@ -226,6 +476,8 @@ def _assemble(
         delta_transition_mm=transition,
         head_calibrated=False,
         cents=cents,
+        source=params.source,
+        termination=params.termination,
     )
 
 

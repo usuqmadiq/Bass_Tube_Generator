@@ -29,6 +29,11 @@ class WhistleHeadParams:
 
     The removable lid sits on flat side rails.  Clamp or seal that joint
     during experiments; the CAD does not model a snap fit or a gasket.
+
+    ``channel_depth_mm`` (0 — same as the flue) cuts the windway deeper than
+    the flue: a lid then carries an insert that leaves exactly its own flue
+    height, so a kit of lids tunes h without reprinting the body.  The
+    labium stays aligned to the jet of ``windway_height_mm``.
     """
 
     tube_outer_diameter_mm: float = 19.5
@@ -46,6 +51,7 @@ class WhistleHeadParams:
     chamber_height_mm: float = 12.0
     lid_thickness_mm: float = 2.0
     lid_lateral_clearance_mm: float = 0.15
+    channel_depth_mm: float = 0.0
 
     def __post_init__(self) -> None:
         reasons: list[str] = []
@@ -57,7 +63,7 @@ class WhistleHeadParams:
             raise WhistleParamsError("; ".join(reasons))
 
         signed = {"labium_offset_mm"}
-        nonnegative = {"socket_clearance_mm", "lid_lateral_clearance_mm"}
+        nonnegative = {"socket_clearance_mm", "lid_lateral_clearance_mm", "channel_depth_mm"}
         for field in fields(self):
             value = getattr(self, field.name)
             if field.name in signed:
@@ -76,6 +82,8 @@ class WhistleHeadParams:
             reasons.append("blade_angle_deg must be between 0 and 90 degrees")
         if self.chamber_height_mm <= 3.0 * self.wall_mm:
             reasons.append("chamber_height_mm must exceed three wall thicknesses")
+        if 0.0 < self.channel_depth_mm < self.windway_height_mm:
+            reasons.append("channel_depth_mm must not be shallower than the flue")
         if self.edge_thickness_mm > self.windway_height_mm:
             reasons.append("edge_thickness_mm must not exceed the windway height")
         if abs(self.labium_offset_mm) >= (
@@ -126,8 +134,13 @@ class WhistleHeadParams:
         return self.jet_center_z_mm + self.labium_offset_mm
 
     @property
+    def channel_depth_resolved_mm(self) -> float:
+        """Depth of the windway cut in the body: the deepest lid flue."""
+        return max(self.channel_depth_mm, self.windway_height_mm)
+
+    @property
     def body_top_z_mm(self) -> float:
-        return self.chamber_height_mm + self.windway_height_mm + self.lid_thickness_mm
+        return self.chamber_height_mm + self.channel_depth_resolved_mm + self.lid_thickness_mm
 
     @property
     def blade_run_mm(self) -> float:
@@ -143,3 +156,95 @@ class WhistleHeadParams:
     def nominal_head_length_mm(self) -> float:
         """Geometric height to the labium; not a calibrated acoustic correction."""
         return self.labium_center_z_mm
+
+
+def voice_frequency_estimate_hz(tube) -> float:
+    """Ориентир основного тона голоса до точного строя, Гц.
+
+    Принимает объект с полями TubeParams. У ноты — её частота по A4. У длины
+    — идеальный столб: c/(4L) у заглушённого конца, c/(2L) у открытого, где
+    L — корпус плюс шейка головки около 12,5 мм. Этого хватает, чтобы
+    подобрать окно: оно округляется до 0,5 мм. Возвращает герцы.
+    """
+    if tube.note:
+        from bass_tube.acoustics.notes import midi_number, parse_note_name
+
+        midi = midi_number(parse_note_name(tube.note))
+        return tube.a4_hz * 2.0 ** ((midi - 69) / 12.0)
+    length = float(tube.body_length_mm or 0.0) + 12.5
+    if tube.termination == "stopped":
+        return tube.speed_of_sound_m_s * 1000.0 / (4.0 * length)
+    return tube.speed_of_sound_m_s * 1000.0 / (2.0 * (length + tube.delta_out_mm))
+
+
+def cutup_for_pressure_mm(
+    frequency_hz: float,
+    pressure_pa: float,
+    theta: float,
+    velocity_coefficient: float = 0.8,
+    density_kg_m3: float = 1.2,
+) -> float:
+    """Окно до кромки W, при котором струя на давлении P даёт число θ на частоте f.
+
+    θ = U/(f·W), U = Cv·√(2P/ρ). Возвращает миллиметры без округления.
+    """
+    velocity = velocity_coefficient * math.sqrt(2.0 * pressure_pa / density_kg_m3)
+    return velocity / (theta * frequency_hz) * 1000.0
+
+
+def flue_for_tube(tube) -> tuple[float, float]:
+    """Щель h и окно W голоса: заданные или подобранные по давлению дутья.
+
+    Принимает объект с полями TubeParams. Пустое окно — W при θ ≈ 11 на
+    давлении whistle_blow_pressure_pa и ориентире основного тона, округлённое
+    до 0,5 мм в пределах 6…36 мм. Пустая щель — W/12, до 0,1 мм, в пределах
+    0,6…2,5 мм: длинная тонкая струя (W/h > 15) теряет силу. Возвращает (h, W).
+    """
+    from bass_tube.constants import (
+        WHISTLE_AUTO_CUTUP_LIMITS_MM,
+        WHISTLE_AUTO_FLUE_LIMITS_MM,
+        WHISTLE_CUTUP_TO_FLUE,
+        WHISTLE_THETA_TARGET,
+    )
+
+    cutup = tube.whistle_cutup_mm
+    if cutup is None:
+        raw = cutup_for_pressure_mm(
+            voice_frequency_estimate_hz(tube),
+            tube.whistle_blow_pressure_pa,
+            WHISTLE_THETA_TARGET,
+        )
+        low, high = WHISTLE_AUTO_CUTUP_LIMITS_MM
+        cutup = min(max(round(raw * 2.0) / 2.0, low), high)
+    height = tube.whistle_windway_height_mm
+    if height is None:
+        low, high = WHISTLE_AUTO_FLUE_LIMITS_MM
+        height = min(max(round(cutup / WHISTLE_CUTUP_TO_FLUE, 1), low), high)
+    return float(height), float(cutup)
+
+
+def head_for_tube(tube) -> WhistleHeadParams:
+    """Размеры боковой головки для уже проверенного набора параметров трубы.
+
+    Принимает объект с полями TubeParams (утиная типизация сохраняет этот
+    модуль чистым от импорта ядра). Гнездо — по концу под модуль с зазором
+    гнезда свистка, глубина — посадка. Щель и окно — из flue_for_tube.
+    Канал корпуса режется на самую глубокую щель набора крышек, лабиум
+    стоит на струе расчётной щели. Возвращает WhistleHeadParams; его
+    проверка поднимает WhistleParamsError.
+    """
+    height, cutup = flue_for_tube(tube)
+    kit = tuple(tube.whistle_lid_kit_mm)
+    return WhistleHeadParams(
+        tube_outer_diameter_mm=tube.seat_outer_diameter_mm,
+        tube_bore_diameter_mm=tube.seat_bore_diameter_mm,
+        socket_clearance_mm=tube.whistle_socket_clearance_mm,
+        socket_depth_mm=tube.seat_length_mm,
+        windway_width_mm=tube.whistle_windway_width_mm,
+        windway_height_mm=height,
+        windway_length_mm=tube.whistle_windway_length_mm,
+        window_length_mm=cutup,
+        labium_offset_mm=tube.whistle_labium_offset_mm,
+        edge_thickness_mm=tube.whistle_edge_thickness_mm,
+        channel_depth_mm=max((height, *kit)),
+    )

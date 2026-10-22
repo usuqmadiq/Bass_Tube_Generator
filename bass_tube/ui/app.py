@@ -11,8 +11,18 @@ from bass_tube.acoustics.holes import HoleError
 from bass_tube.acoustics.slider import SliderError
 from bass_tube.acoustics.trim import TrimError
 from bass_tube.acoustics.tuning import TuningError
-from bass_tube.body.tube import BodyError, TubeBody, export_tube_body
-from bass_tube.constants import SCALE_IDS, SLIDER_KINDS
+from bass_tube.body.tube import BodyError, TubeBody, export_tube_body, export_whistle_head
+from bass_tube.constants import (
+    SCALE_IDS,
+    SLIDER_KINDS,
+    SOURCE_WHISTLE,
+    SOURCES,
+    TERMINATION_OPEN,
+    TERMINATION_STOPPED,
+    TERMINATIONS,
+    WHISTLE_HEAD_AXIAL,
+    WHISTLE_HEAD_KINDS,
+)
 from bass_tube.design import Design
 from bass_tube.layout.centerline import CenterlineError
 from bass_tube.layout.coil import LayoutError
@@ -32,6 +42,12 @@ from bass_tube.ui.form import (
     numeric_text_ok,
     params_from_form,
     resolved_seat_text,
+    SCOPE_MODULES,
+    resolve_head_kind,
+    resolve_scope,
+    resolve_source,
+    suggested_module_stem,
+    resolve_termination,
     straight_choices,
     suggested_stem,
     _resolve_slider_kind,
@@ -39,19 +55,34 @@ from bass_tube.ui.form import (
 from bass_tube.ui.i18n import (
     LANG_RU,
     current_language,
+    head_kind_choice_label,
     is_auto_word,
+    scope_choice_label,
     is_drone_off_word,
     load_saved_language,
     save_language,
     scale_choice_label,
     set_current_language,
     slider_choice_label,
+    source_choice_label,
     t,
+    termination_choice_label,
     yes_no_choices,
 )
+from bass_tube.sources import (
+    build_modules,
+    design_sources,
+    export_membrane_sources,
+    export_modules,
+    modules_preview,
+    pair_sources,
+)
 from bass_tube.ui.preview import ModelPreview
-from bass_tube.ui.report import format_design_report, format_pair_report
+from bass_tube.ui.report import format_design_report, format_modules_report, format_pair_report
 from bass_tube.ui.theme import ACCENT, BORDER, CARD, TEXT, apply_theme, try_dark_titlebar
+from bass_tube.whistle.acoustics import WhistleAcousticsError
+from bass_tube.whistle.axial_head import AxialHeadError
+from bass_tube.whistle.params import WhistleParamsError
 
 
 class TubeApp:
@@ -74,12 +105,15 @@ class TubeApp:
         self.root.geometry("1280x820")
         apply_theme(self.root)
         self._design: Design | None = None
+        self._modules = None
         self._pair: VoicePair | None = None
         self._built_signature: tuple[str, ...] | None = None
         self._busy = False
         self._fitting = False
         self._texts: list[tuple[tk.Misc, str]] = []
         self._combos: dict[str, ttk.Combobox] = {}
+        self._widgets: dict[str, tk.Misc] = {}
+        self._syncing = False
         self._vars = _string_vars(default_form())
         self._numbers_only = (self.root.register(numeric_text_ok), "%P")
         self._build_widgets()
@@ -87,8 +121,11 @@ class TubeApp:
         for variable in self._vars.values():
             variable.trace_add("write", self._on_field_changed)
         self._vars["slider_kind"].trace_add("write", self._on_slider_kind_changed)
+        for name in _VOICE_RULE_FIELDS:
+            self._vars[name].trace_add("write", self._on_voice_changed)
         self._toggle_goal()
         self._sync_trim_with_slider()
+        self._sync_voice_rules()
         if visible:
             try_dark_titlebar(self.root)
         else:
@@ -134,7 +171,9 @@ class TubeApp:
             self._remap_choices()
             self.preview.apply_language()
             self._refresh_derived()
-            if self._pair is not None:
+            if self._modules is not None:
+                self._set_report(format_modules_report(self._modules))
+            elif self._pair is not None:
                 self._set_report(format_pair_report(self._pair))
             elif self._design is not None:
                 self._set_report(format_design_report(self._design))
@@ -142,7 +181,7 @@ class TubeApp:
                 self._built_signature = self.signature()
         finally:
             self._fitting = False
-        if self._design is None and self._pair is None:
+        if self._design is None and self._pair is None and self._modules is None:
             if self.report_text():
                 self._set_status(t("status.reject"))
             else:
@@ -167,7 +206,11 @@ class TubeApp:
         self.root.update()
         try:
             try:
-                result = build_instrument(params_from_form(self.form_input()))
+                params = params_from_form(self.form_input())
+                if resolve_scope(self._vars["build_scope"].get()) == SCOPE_MODULES:
+                    self._show_modules(build_modules(params))
+                    return
+                result = build_instrument(params)
             except (
                 ParamsError,
                 TuningError,
@@ -177,9 +220,13 @@ class TubeApp:
                 LayoutError,
                 CenterlineError,
                 BodyError,
+                WhistleAcousticsError,
+                WhistleParamsError,
+                AxialHeadError,
             ) as exc:
                 self._reject(str(exc))
                 return
+            self._modules = None
             if isinstance(result, VoicePair):
                 self._pair = result
                 self._design = None
@@ -191,7 +238,9 @@ class TubeApp:
                 self._built_signature = self.signature()
                 self._set_report(format_design_report(result))
             try:
-                self.preview.show_shape(preview_instrument(result))
+                self.preview.show_shape(
+                    preview_instrument(result), sources=instrument_sources(result)
+                )
             except Exception as exc:
                 self.save_button.state(["!disabled"])
                 self._set_status(t("status.preview_fail").format(exc=exc))
@@ -216,8 +265,14 @@ class TubeApp:
         """
         design = self._design
         pair = self._pair
-        if (design is None and pair is None) or self.signature() != self._built_signature:
+        modules = self._modules
+        if (design is None and pair is None and modules is None) or (
+            self.signature() != self._built_signature
+        ):
             self._set_status(t("status.build_first"))
+            return
+        if modules is not None:
+            self._save_modules(modules)
             return
         chosen = filedialog.asksaveasfilename(
             title=t("dialog.save_title"),
@@ -236,6 +291,46 @@ class TubeApp:
                 saved = export_pair(pair, step_path, stl_path)
             else:
                 saved = _export_design(design, step_path, stl_path)
+        except BodyError as exc:
+            self._set_status(str(exc))
+            return
+        self._set_status(t("status.saved").format(paths=", ".join(str(path) for path in saved)))
+
+    def _show_modules(self, modules) -> None:
+        """Показывает режим «только модуль»: печатные детали и отчёт.
+
+        Принимает ModuleSet. Труба и пара сбрасываются, сохранение включается.
+        Ничего не возвращает.
+        """
+        self._design = None
+        self._pair = None
+        self._modules = modules
+        self._built_signature = self.signature()
+        self._set_report(format_modules_report(modules))
+        try:
+            self.preview.show_shape(modules_preview(modules))
+        except Exception as exc:
+            self.save_button.state(["!disabled"])
+            self._set_status(t("status.preview_fail").format(exc=exc))
+            return
+        self.save_button.state(["!disabled"])
+        self._set_status(t("status.ready"))
+
+    def _save_modules(self, modules) -> None:
+        """Спрашивает путь и пишет только модули-источники."""
+        chosen = filedialog.asksaveasfilename(
+            title=t("dialog.save_title"),
+            defaultextension=".step",
+            filetypes=[("STEP", "*.step"), ("STEP", "*.stp")],
+            initialfile=f"{suggested_module_stem(modules.voices[0].params)}.step",
+        )
+        if not chosen:
+            return
+        step_path = Path(chosen)
+        if step_path.suffix.lower() not in {".step", ".stp"}:
+            step_path = step_path.with_suffix(".step")
+        try:
+            saved = export_modules(modules, step_path)
         except BodyError as exc:
             self._set_status(str(exc))
             return
@@ -367,6 +462,31 @@ class TubeApp:
             goal, 1, "field.note", "note", NOTE_CHOICES, editable=True, numeric=False
         )
         self.length_entry = self._field(goal, 2, "field.body_length", "body_length")
+        self._choice_field(goal, 3, "field.build_scope", "build_scope", _scope_choices())
+
+        voice = self._group(parent, "group.voice")
+        self._choice_field(voice, 0, "field.source", "source", _source_choices())
+        self._choice_field(voice, 1, "field.termination", "termination", _termination_choices())
+        self._hint(voice, 2, "hint.voice")
+
+        whistle = self._group(parent, "group.whistle")
+        self._choice_field(
+            whistle, 0, "field.whistle_head_kind", "whistle_head_kind", _head_kind_choices()
+        )
+        self._field(whistle, 1, "field.whistle_windway_height", "whistle_windway_height")
+        self._field(whistle, 2, "field.whistle_windway_width", "whistle_windway_width")
+        self._field(whistle, 3, "field.whistle_windway_length", "whistle_windway_length")
+        self._field(whistle, 4, "field.whistle_cutup", "whistle_cutup")
+        self._field(whistle, 5, "field.whistle_edge", "whistle_edge")
+        self._field(whistle, 6, "field.whistle_labium_offset", "whistle_labium_offset")
+        self._field(whistle, 7, "field.whistle_azimuth", "whistle_window_azimuth")
+        self._field(whistle, 8, "field.mouth_correction", "mouth_correction")
+        self._field(whistle, 9, "field.blow_pressure", "whistle_blow_pressure")
+        self._field(whistle, 10, "field.socket_clearance", "whistle_socket_clearance")
+        kit = ttk.Entry(whistle, textvariable=self._vars["whistle_lid_kit"], width=16)
+        self._widgets["whistle_lid_kit"] = kit
+        self._place(whistle, 11, "field.lid_kit", kit, numeric=False)
+        self._hint(whistle, 12, "hint.whistle")
 
         section = self._group(parent, "group.tube")
         self._field(section, 0, "field.outer_diameter", "outer_diameter")
@@ -440,7 +560,11 @@ class TubeApp:
             numeric=False,
         )
         self._spin_field(drone, 1, "field.drone_trim", "drone_trim_semitones", 0, 12)
-        self._hint(drone, 2, "hint.drone")
+        self._choice_field(drone, 2, "field.drone_source", "drone_source", _source_choices())
+        self._choice_field(
+            drone, 3, "field.drone_termination", "drone_termination", _termination_choices()
+        )
+        self._hint(drone, 4, "hint.drone")
 
         corrections = self._group(parent, "group.corrections")
         self._field(corrections, 0, "field.delta_head", "delta_head")
@@ -492,6 +616,7 @@ class TubeApp:
         Возвращает поле ввода.
         """
         entry = ttk.Entry(group, textvariable=self._vars[name], width=16)
+        self._widgets[name] = entry
         return self._place(group, row, key, entry, numeric=True)
 
     def _spin_field(
@@ -506,6 +631,7 @@ class TubeApp:
         spin = ttk.Spinbox(
             group, textvariable=self._vars[name], from_=low, to=high, increment=1, width=14
         )
+        self._widgets[name] = spin
         return self._place(group, row, key, spin, numeric=True)
 
     def _choice_field(
@@ -534,6 +660,7 @@ class TubeApp:
         )
         box.bind("<<ComboboxSelected>>", self.commit_dependents, add="+")
         self._combos[name] = box
+        self._widgets[name] = box
         return self._place(group, row, key, box, numeric=editable and numeric)
 
     def _place(self, group: ttk.Frame, row: int, key: str, widget, numeric: bool):
@@ -564,6 +691,12 @@ class TubeApp:
         self._remap_combo(
             "slider_kind", [slider_choice_label(key) for key in ("",) + SLIDER_KINDS]
         )
+        for name in ("source", "drone_source"):
+            self._remap_combo(name, list(_source_choices()))
+        for name in ("termination", "drone_termination"):
+            self._remap_combo(name, list(_termination_choices()))
+        self._remap_combo("whistle_head_kind", list(_head_kind_choices()))
+        self._remap_combo("build_scope", list(_scope_choices()))
         auto = t("choice.auto")
         box = self._combos["straight_count"]
         current = self._vars["straight_count"].get()
@@ -631,6 +764,8 @@ class TubeApp:
             return
         if self._vars["slider_semitones"].get().strip() not in ("", "0"):
             self._vars["slider_semitones"].set("")
+        if self._melody_stopped_whistle():
+            return
         self.trim_entry.state(["!disabled"])
 
     def _on_field_changed(self, *_args: object) -> None:
@@ -653,6 +788,84 @@ class TubeApp:
         if self._fitting:
             return
         self._sync_trim_with_slider()
+
+    def _on_voice_changed(self, *_args: object) -> None:
+        """Перекладывает правила полей при смене источника, конца, вида или дрона.
+
+        Принимает служебные аргументы trace. Ничего не возвращает.
+        """
+        if self._fitting or self._syncing:
+            return
+        self._sync_voice_rules()
+
+    def _melody_stopped_whistle(self) -> bool:
+        """Мелодия — свисток с заглушённым концом: трубке подстройки некуда выходить."""
+        return (
+            resolve_source(self._vars["source"].get()) == SOURCE_WHISTLE
+            and resolve_termination(self._vars["termination"].get()) == TERMINATION_STOPPED
+        )
+
+    def _sync_voice_rules(self) -> None:
+        """Гасит и включает поля под источник, дальний конец и вид головки.
+
+        Ничего не принимает. Конец у мембраны всегда открыт — поле гаснет.
+        Свисток-мелодия пока без дырок и слайдера: их поля обнуляются и
+        гаснут. Заглушённый конец печатается глухим: подстройка голоса
+        обнуляется и гаснет. Карточка свистка живёт, пока хоть один голос —
+        свисток; поворот окна — только у осевой головки. Источник и конец
+        дрона живут при заданной ноте дрона. Ничего не возвращает.
+        """
+        if self._syncing:
+            return
+        self._syncing = True
+        try:
+            melody_whistle = resolve_source(self._vars["source"].get()) == SOURCE_WHISTLE
+            drone_on = not is_drone_off_word(self._vars["drone_note"].get())
+            drone_whistle = (
+                drone_on and resolve_source(self._vars["drone_source"].get()) == SOURCE_WHISTLE
+            )
+            open_label = termination_choice_label(TERMINATION_OPEN)
+            if not melody_whistle:
+                self._vars["termination"].set(open_label)
+            self._enable("termination", melody_whistle)
+            self._enable("drone_source", drone_on)
+            if not drone_whistle:
+                self._vars["drone_termination"].set(open_label)
+            self._enable("drone_termination", drone_whistle)
+
+            whistle_any = melody_whistle or drone_whistle
+            for name in _WHISTLE_FIELDS:
+                self._enable(name, whistle_any)
+            axial = resolve_head_kind(self._vars["whistle_head_kind"].get()) == WHISTLE_HEAD_AXIAL
+            if not axial and self._vars["whistle_window_azimuth"].get().strip() not in ("", "0"):
+                self._vars["whistle_window_azimuth"].set("0")
+            self._enable("whistle_window_azimuth", whistle_any and axial)
+
+            if melody_whistle:
+                self._vars["hole_count"].set("0")
+                self._vars["slider_kind"].set(slider_choice_label(""))
+            for name in _HOLE_SLIDER_FIELDS:
+                self._enable(name, not melody_whistle)
+
+            if self._melody_stopped_whistle():
+                self._vars["trim_semitones"].set("0")
+                self.trim_entry.state(["disabled"])
+            elif not _resolve_slider_kind(self._vars["slider_kind"].get()):
+                self.trim_entry.state(["!disabled"])
+            drone_stopped = drone_whistle and (
+                resolve_termination(self._vars["drone_termination"].get()) == TERMINATION_STOPPED
+            )
+            if drone_stopped:
+                self._vars["drone_trim_semitones"].set("0")
+            self._enable("drone_trim_semitones", not drone_stopped)
+        finally:
+            self._syncing = False
+
+    def _enable(self, name: str, on: bool) -> None:
+        """Включает или гасит виджет поля по имени."""
+        widget = self._widgets.get(name)
+        if widget is not None:
+            widget.state(["!disabled"] if on else ["disabled"])
 
     def commit_dependents(self, _event: tk.Event | None = None) -> None:
         """Подтягивает стенку, дно, радиус и глубину под наружный диаметр.
@@ -723,6 +936,7 @@ class TubeApp:
         """
         self._design = None
         self._pair = None
+        self._modules = None
         self._built_signature = None
         self.preview.clear()
         self._set_report(text)
@@ -793,7 +1007,27 @@ def _export_design(design: Design, step_path: Path, stl_path: Path) -> list[Path
         slider_stl = stl_path.with_name(f"{stl_path.stem}-слайдер.stl")
         export_tube_body(design.slider_body, slider_step, slider_stl)
         saved.extend((slider_step, slider_stl))
+    saved.extend(export_membrane_sources(design.params, step_path))
+    if design.whistle_head is not None:
+        paths = (
+            step_path.with_name(f"{step_path.stem}-свисток{step_path.suffix}"),
+            stl_path.with_name(f"{stl_path.stem}-свисток.stl"),
+            step_path.with_name(f"{step_path.stem}-свисток-крышка{step_path.suffix}"),
+            stl_path.with_name(f"{stl_path.stem}-свисток-крышка.stl"),
+        )
+        saved.extend(
+            export_whistle_head(
+                design.whistle_head, *paths, kit_mm=design.params.whistle_lid_kit_mm
+            )
+        )
     return saved
+
+
+def instrument_sources(result: Design | VoicePair) -> list:
+    """Модули-источники на входах для предпросмотра: мембрана или свисток."""
+    if isinstance(result, VoicePair):
+        return pair_sources(result)
+    return design_sources(result)
 
 
 def _slice_as_body(template: TubeBody | None, solid) -> TubeBody:
@@ -813,6 +1047,61 @@ def _slice_as_body(template: TubeBody | None, solid) -> TubeBody:
         seat_bore_diameter_mm=template.seat_bore_diameter_mm,
         base_height_mm=template.base_height_mm,
     )
+
+
+# Поля, от которых зависят правила гашения источника и свистка.
+_VOICE_RULE_FIELDS = (
+    "source",
+    "termination",
+    "drone_note",
+    "drone_source",
+    "drone_termination",
+    "whistle_head_kind",
+)
+# Карточка свистковой головки: живёт, пока хоть один голос — свисток.
+_WHISTLE_FIELDS = (
+    "whistle_head_kind",
+    "whistle_windway_height",
+    "whistle_windway_width",
+    "whistle_windway_length",
+    "whistle_cutup",
+    "whistle_edge",
+    "whistle_labium_offset",
+    "mouth_correction",
+    "whistle_blow_pressure",
+    "whistle_socket_clearance",
+    "whistle_lid_kit",
+)
+# Дырки и слайдер, которых у свистка-мелодии пока нет.
+_HOLE_SLIDER_FIELDS = (
+    "hole_count",
+    "scale",
+    "hole_diameter",
+    "slider_kind",
+    "slider_semitones",
+    "slider_pairs",
+    "slider_clearance",
+)
+
+
+def _scope_choices() -> tuple[str, ...]:
+    """Подписи режима построения: трубу с модулем, только модуль."""
+    return (scope_choice_label("tube"), scope_choice_label("modules"))
+
+
+def _source_choices() -> tuple[str, ...]:
+    """Подписи источника на текущем языке: мембрана, свисток."""
+    return tuple(source_choice_label(key) for key in SOURCES)
+
+
+def _termination_choices() -> tuple[str, ...]:
+    """Подписи дальнего конца на текущем языке: открыт, заглушён."""
+    return tuple(termination_choice_label(key) for key in TERMINATIONS)
+
+
+def _head_kind_choices() -> tuple[str, ...]:
+    """Подписи вида свистковой головки на текущем языке."""
+    return tuple(head_kind_choice_label(key) for key in WHISTLE_HEAD_KINDS)
 
 
 def _string_vars(form: FormInput) -> dict[str, tk.StringVar]:

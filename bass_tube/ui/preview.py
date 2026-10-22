@@ -28,6 +28,7 @@ from bass_tube.ui.theme import (
     PREVIEW_EMPTY_BG,
     PREVIEW_EMPTY_FG,
     PREVIEW_MODEL,
+    PREVIEW_SOURCE,
 )
 
 
@@ -52,13 +53,22 @@ class PreviewScene:
         self._image_filter.ReadFrontBufferOff()
         self._actor: vtkActor | None = None
 
-    def show_shape(self, shape) -> None:
+    def show_shape(self, shape, sources=None) -> None:
         """Ставит солид в кадр и наводит камеру.
 
-        Принимает фигуру CadQuery. Строит сетку, красит деталь и
-        вписывает её в кадр видом сбоку сверху. Ничего не возвращает.
+        Принимает фигуру CadQuery и необязательный список модулей-источников
+        (мембрана, свисток) — они рисуются своим цветом поверх входов.
+        Строит сетки, красит детали и вписывает всё в кадр видом сбоку
+        сверху. Ничего не возвращает.
         """
         self._renderer.RemoveAllViewProps()
+        self._actor = self._add_actor(shape, PREVIEW_MODEL)
+        if sources:
+            self._add_actor(_compound(sources), PREVIEW_SOURCE)
+        self._aim_camera()
+
+    def _add_actor(self, shape, color) -> vtkActor:
+        """Сетка фигуры в кадр заданным цветом. Возвращает актёра VTK."""
         poly = shape.toVtkPolyData(angularTolerance=0.25, normals=True)
         mapper = vtkPolyDataMapper()
         mapper.SetInputData(poly)
@@ -66,14 +76,13 @@ class PreviewScene:
         actor = vtkActor()
         actor.SetMapper(mapper)
         prop = actor.GetProperty()
-        prop.SetColor(*PREVIEW_MODEL)
+        prop.SetColor(*color)
         prop.SetAmbient(0.28)
         prop.SetDiffuse(0.72)
         prop.SetSpecular(0.28)
         prop.SetSpecularPower(36)
         self._renderer.AddActor(actor)
-        self._actor = actor
-        self._aim_camera()
+        return actor
 
     def _aim_camera(self) -> None:
         """Ставит камеру сбоку и чуть сверху, ось z — вверх экрана.
@@ -206,13 +215,14 @@ class ModelPreview(ttk.Frame):
         """
         self.show_shape(body.solid.val())
 
-    def show_shape(self, shape) -> None:
+    def show_shape(self, shape, sources=None) -> None:
         """Показывает произвольный солид CadQuery.
 
-        Принимает фигуру (корпус или корпус вместе с трубкой подстройки).
-        Заменяет прошлую сетку и рисует кадр. Ничего не возвращает.
+        Принимает фигуру (корпус или корпус вместе с трубкой подстройки) и
+        необязательные модули-источники на входах, которые рисуются своим
+        цветом. Заменяет прошлую сетку и рисует кадр. Ничего не возвращает.
         """
-        self.scene.show_shape(shape)
+        self.scene.show_shape(shape, sources)
         self.view.configure(text="")
         self._redraw()
 
@@ -326,3 +336,12 @@ def _vtk_image_to_pil(vtk_image) -> Image.Image:
     if channels > 3:
         frame = frame[:, :, :3]
     return Image.fromarray(np.ascontiguousarray(frame), mode="RGB")
+
+
+def _compound(shapes):
+    """Одна фигура из списка: сборка без слияния, детали остаются отдельными."""
+    import cadquery as cq
+
+    if len(shapes) == 1:
+        return shapes[0]
+    return cq.Compound.makeCompound(list(shapes))

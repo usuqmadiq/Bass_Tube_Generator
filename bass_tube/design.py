@@ -8,7 +8,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+
+import cadquery as cq
 
 from bass_tube.acoustics.holes import HolePlan, plan_holes
 from bass_tube.acoustics.slider import SliderPlan, bind_slider_columns, resolve_slider, slider_leg_points
@@ -20,7 +22,17 @@ from bass_tube.body.tube import BodyError, TubeBody, build_tube_body
 from bass_tube.body.tuner import build_tuner_body
 from bass_tube.layout.centerline import Centerline, build_centerline
 from bass_tube.layout.clearance import check_channel_clearance
+from bass_tube.constants import SOURCE_WHISTLE, TERMINATION_STOPPED, WHISTLE_HEAD_AXIAL
 from bass_tube.layout.coil import Coil, bottom_socket_mm, layout_coil
+from bass_tube.whistle.axial_head import (
+    AxialHeadError,
+    AxialHeadParts,
+    axial_head_for_tube,
+    build_axial_head,
+)
+from bass_tube.whistle.geometry import HeadParts, WhistleGeometryError, build_head
+from bass_tube.whistle.params import head_for_tube
+from bass_tube.whistle.planning import flue_tuning, plan_existing_tube
 from bass_tube.layout.holes import PlacedHole, exit_keep_mm, place_holes_in_envelope
 from bass_tube.layout.print_cuts import ColumnSpan, column_spans, keep_out_bands
 from bass_tube.params import TubeParams
@@ -38,6 +50,9 @@ class Design:
     placed_holes — дырки на прямых с направлением наружу.
     body_slices и slider_slices — куски на печать со стыками «папа — мама», если
     включены разрезы; иначе пустые кортежи (сохраняется целая деталь).
+    whistle_head — печатная свистковая головка (корпус и съёмная крышка) в
+    координатах её гнезда, None у мембраны. whistle_report — расчётный
+    паспорт свистка со всеми допущениями и предупреждениями, None у мембраны.
     """
 
     params: TubeParams
@@ -54,6 +69,8 @@ class Design:
     placed_holes: tuple[PlacedHole, ...]
     body_slices: tuple[PrintSlice, ...]
     slider_slices: tuple[PrintSlice, ...]
+    whistle_head: HeadParts | AxialHeadParts | None = None
+    whistle_report: dict | None = None
 
 
 @dataclass(eq=False)
@@ -88,10 +105,17 @@ def plan_design(params: TubeParams, stack_height_mm: float | None = None) -> Des
     trim = None if slider is not None else resolve_trim(params, tuning)
     holes = plan_holes(params, tuning, exit_keep_mm(params, trim))
     placed: tuple[PlacedHole, ...] = ()
+    # Заглушённый конец печатается глухим: ось длиннее воздушного столба
+    # на дно заглушки, канал не дорезается до дна (см. bore_parts).
+    layout_tuning = tuning
+    if params.termination == TERMINATION_STOPPED:
+        layout_tuning = replace(
+            tuning, body_length_mm=tuning.body_length_mm + params.floor_mm
+        )
     if holes is None:
-        coil = layout_coil(params, tuning, trim, slider, stack_height_mm)
+        coil = layout_coil(params, layout_tuning, trim, slider, stack_height_mm)
     else:
-        coil, placed = place_holes_in_envelope(params, tuning, holes, trim, stack_height_mm)
+        coil, placed = place_holes_in_envelope(params, layout_tuning, holes, trim, stack_height_mm)
     if slider is not None:
         slider = bind_slider_columns(slider, coil.straight_count)
     centerline = build_centerline(coil, params.joint_length_mm)
@@ -133,6 +157,7 @@ def build_design(params: TubeParams) -> Design:
     coil, centerline, placed = plan.coil, plan.centerline, plan.placed_holes
     trim, slider = plan.trim, plan.slider
     body = build_tube_body(centerline, coil, params, placed, slider)
+    whistle_head, whistle_report = _build_whistle_head(params, plan.tuning)
     tuner = build_tuner_body(trim) if trim is not None else None
     slider_body = (
         build_slider_body(
@@ -159,23 +184,98 @@ def build_design(params: TubeParams) -> Design:
         placed_holes=placed,
         body_slices=body_slices,
         slider_slices=slider_slices,
+        whistle_head=whistle_head,
+        whistle_report=whistle_report,
     )
 
 
-def preview_solid(design: Design):
-    """Солид для окна: корпус, справа трубка подстройки или деталь слайдера.
+def _build_whistle_head(
+    params: TubeParams,
+    tuning,
+) -> tuple[HeadParts | None, dict | None]:
+    """Строит печатную головку свистка и её расчётный паспорт.
 
-    Принимает Design. Сдвигает отдельную деталь по x за габарит корпуса
-    с зазором 10 мм, чтобы обе были видны сразу. Возвращает фигуру CadQuery.
+    Принимает параметры и уже посчитанный строй. У мембраны возвращает
+    (None, None). У свистка собирает головку из свистковых полей набора и
+    паспорт прототипа с допущениями; длина воздушного столба берётся из
+    строя, чтобы не считать её дважды. Если головка не построилась,
+    поднимает BodyError с причиной.
+    """
+    if params.source != SOURCE_WHISTLE:
+        return None, None
+    if params.whistle_head_kind == WHISTLE_HEAD_AXIAL:
+        head = axial_head_for_tube(params)
+        try:
+            parts = build_axial_head(head)
+        except AxialHeadError as exc:
+            raise BodyError(f"Осевая головка свистка не построилась: {exc}") from exc
+    else:
+        head = head_for_tube(params)
+        try:
+            parts = build_head(head)
+        except WhistleGeometryError as exc:
+            raise BodyError(f"Головка свистка не построилась: {exc}") from exc
+    report = plan_existing_tube(
+        params,
+        head,
+        body_length_mm=tuning.body_length_mm,
+        termination=params.termination,
+        pressure_pa=params.whistle_blow_pressure_pa,
+        mouth_correction_mm=params.mouth_correction_mm,
+    )
+    kit = () if params.whistle_head_kind == WHISTLE_HEAD_AXIAL else params.whistle_lid_kit_mm
+    report["flue_tuning"] = flue_tuning(
+        head, report["passive_frequency_hz"], params.whistle_blow_pressure_pa, kit
+    )
+    return parts, report
+
+
+def whistle_head_at_inlet(design: Design) -> cq.Compound | None:
+    """Головка свистка в сборочных координатах на входе корпуса.
+
+    Принимает Design. Переносит корпус и крышку головки на верх первой
+    прямой: её гнездо обнимает конец трубы, крышка остаётся съёмной —
+    детали не сливаются. Возвращает Compound или None у мембраны.
+    Это сборка для просмотра, печатать её одним куском не нужно.
+    """
+    if design.whistle_head is None:
+        return None
+    inlet = design.centerline.sample(0.0).point
+    move = (inlet.x, inlet.y, inlet.z)
+    return cq.Compound.makeCompound(
+        [part.translate(move) for part in whistle_head_solids(design.whistle_head)]
+    )
+
+
+def whistle_head_solids(head) -> list:
+    """Солиды головки свистка в её собственных координатах гнезда.
+
+    Принимает HeadParts боковой головки (корпус и крышка) или
+    AxialHeadParts осевой (одна деталь). Возвращает список фигур CadQuery.
+    """
+    if isinstance(head, AxialHeadParts):
+        return [head.solid.val()]
+    return [head.body.val(), head.lid.val()]
+
+
+def preview_solid(design: Design):
+    """Солид для окна: корпус, справа отдельные печатные вставки.
+
+    Принимает Design. Сдвигает трубку подстройки или слайдер по x за
+    габарит корпуса с зазором 10 мм, чтобы всё было видно сразу. Модуль-
+    источник сюда не входит: окно ставит его на вход отдельным цветом
+    (bass_tube.sources). Возвращает фигуру CadQuery.
     """
     shape = design.body.solid.val()
+    extras = []
     extra_body = design.slider_body if design.slider_body is not None else design.tuner
-    if extra_body is None:
-        return shape
-    extra = extra_body.solid.val()
+    if extra_body is not None:
+        extras.append(extra_body.solid.val())
     gap_mm = 10.0
-    dx = shape.BoundingBox().xmax + gap_mm - extra.BoundingBox().xmin
-    return shape.fuse(extra.translate((dx, 0.0, 0.0)))
+    for extra in extras:
+        dx = shape.BoundingBox().xmax + gap_mm - extra.BoundingBox().xmin
+        shape = shape.fuse(extra.translate((dx, 0.0, 0.0)))
+    return shape
 
 
 def body_split_guides(

@@ -123,6 +123,89 @@ def plan_existing_tube(
     return report
 
 
+def flue_tuning(
+    head,
+    frequency_hz: float,
+    pressure_pa: float,
+    lid_kit_mm=(),
+    velocity_coefficient: float = 0.8,
+    density_kg_m3: float = 1.2,
+) -> dict:
+    """Настройка воздушного канала: рабочие давления, окно под давление, крышки.
+
+    Принимает размеры головы (боковой или осевой), частоту основного тона,
+    давление дутья и щели набора крышек (только у боковой). Струя держит
+    основной тон, пока θ = U/(f·W) в игровом диапазоне 7…17 (одно
+    исследование блокфлейт — ориентир, не гарантия). Возвращает словарь:
+    давления, при которых θ проходит диапазон для этого окна; окно, нужное
+    при заданном давлении; θ при нём; для каждой крышки — расход, W/h и
+    положение кромки относительно центра струи; предупреждения.
+    """
+    from bass_tube.constants import WHISTLE_CUTUP_PER_BORE_WARNING, WHISTLE_THETA_RANGE
+    from bass_tube.whistle.params import cutup_for_pressure_mm
+
+    low, high = WHISTLE_THETA_RANGE
+    cutup = head.window_length_mm
+
+    def pressure_for(theta: float) -> float:
+        velocity = theta * frequency_hz * cutup / 1000.0 / velocity_coefficient
+        return density_kg_m3 * velocity * velocity / 2.0
+
+    air = estimate_airflow(
+        pressure_pa, head.windway_width_mm, head.windway_height_mm,
+        frequency_hz=frequency_hz, cutup_mm=cutup,
+        velocity_coefficient=velocity_coefficient, density_kg_m3=density_kg_m3,
+    )
+    lids = []
+    labium_center = getattr(head, "labium_center_z_mm", None)
+    for flue in lid_kit_mm:
+        lid_air = estimate_airflow(
+            pressure_pa, head.windway_width_mm, flue,
+            velocity_coefficient=velocity_coefficient, density_kg_m3=density_kg_m3,
+        )
+        offset = None
+        inside = None
+        if labium_center is not None:
+            offset = labium_center - (head.chamber_height_mm + flue / 2.0)
+            inside = abs(offset) < (flue + head.edge_thickness_mm) / 2.0
+        lids.append({
+            "flue_mm": flue,
+            "flow_l_min": lid_air.flow_l_min,
+            "cutup_to_flue": cutup / flue,
+            "labium_from_jet_center_mm": offset,
+            "labium_in_jet": inside,
+        })
+    warnings = []
+    bore = head.tube_bore_diameter_mm
+    if cutup > WHISTLE_CUTUP_PER_BORE_WARNING * bore:
+        warnings.append(
+            f"Окно {cutup:g} мм длиннее {WHISTLE_CUTUP_PER_BORE_WARNING:g} диаметра канала "
+            f"{bore:g} мм: обратная связь окна с узкой трубой слабеет. Сильнее всего "
+            "громкость баса поднимает более широкий канал трубы."
+        )
+    if cutup / head.windway_height_mm > 15.0:
+        warnings.append(
+            f"W/h = {cutup / head.windway_height_mm:.1f} > 15: длинная тонкая струя "
+            "теряет силу до кромки — возьмите крышку с большей щелью."
+        )
+    return {
+        "theta_range": [low, high],
+        "frequency_hz": frequency_hz,
+        "blow_pressure_pa": pressure_pa,
+        "theta_at_blow_pressure": air.theta,
+        "working_pressure_pa": [pressure_for(low), pressure_for(high)],
+        "cutup_for_blow_pressure_mm": [
+            cutup_for_pressure_mm(frequency_hz, pressure_pa, high, velocity_coefficient, density_kg_m3),
+            cutup_for_pressure_mm(frequency_hz, pressure_pa, low, velocity_coefficient, density_kg_m3),
+        ],
+        "flow_l_min": air.flow_l_min,
+        "cutup_mm": cutup,
+        "flue_mm": head.windway_height_mm,
+        "lids": lids,
+        "warnings": warnings,
+    }
+
+
 def _report(sections, head, termination, pressure, mouth, outlet, c, coefficient, ratio):
     neck = BoreSection(head.nominal_head_length_mm, head.tube_bore_diameter_mm)
     complete = (neck, *sections)
